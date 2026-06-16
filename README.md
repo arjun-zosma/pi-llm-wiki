@@ -421,34 +421,6 @@ Thanks to everyone who has contributed! This list is regenerated automatically b
                     <sub><b>Arjun Nayak</b></sub>
                 </a>
             </td>
-            <td align="center">
-                <a href="https://github.com/jfraser">
-                    <img src="https://avatars.githubusercontent.com/u/165964?v=4" width="64;" alt="jfraser"/>
-                    <br />
-                    <sub><b>James Fraser</b></sub>
-                </a>
-            </td>
-            <td align="center">
-                <a href="https://github.com/Shanvit7">
-                    <img src="https://avatars.githubusercontent.com/u/64424817?v=4" width="64;" alt="Shanvit7"/>
-                    <br />
-                    <sub><b>Shanvit S Shetty</b></sub>
-                </a>
-            </td>
-            <td align="center">
-                <a href="https://github.com/CelestialCreator">
-                    <img src="https://avatars.githubusercontent.com/u/177931942?v=4" width="64;" alt="CelestialCreator"/>
-                    <br />
-                    <sub><b>Akshay</b></sub>
-                </a>
-            </td>
-            <td align="center">
-                <a href="https://github.com/mystery4f">
-                    <img src="https://avatars.githubusercontent.com/u/40482524?v=4" width="64;" alt="mystery4f"/>
-                    <br />
-                    <sub><b>标准萌新</b></sub>
-                </a>
-            </td>
 		</tr>
 	<tbody>
 </table>
