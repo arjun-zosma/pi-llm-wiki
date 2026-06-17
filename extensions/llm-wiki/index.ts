@@ -2,6 +2,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { installGuardrails } from "./lib/guardrails.js";
+import { appendWikiStatus } from "./lib/inject.js";
 import { registerWikiModelCommand } from "./lib/model-command.js";
 import {
   buildSessionNotice,
@@ -295,8 +296,7 @@ Then call wiki_bootstrap with the inferred topic and mode to finalize the setup.
 
     // Always inject a visible wiki status footer, even when empty
     // This ensures the model knows the wiki is active and can use it
-    injectedContext +=
-      "\n\n<wiki_status>LLM Wiki active — use wiki_recall for deeper search, wiki_observe to record observations, wiki_retro to save insights.</wiki_status>";
+    injectedContext = appendWikiStatus(injectedContext);
 
     if (injectedContext === event.systemPrompt) return;
     return { systemPrompt: injectedContext };
