@@ -141,6 +141,16 @@ describe("package structure", () => {
     expect(sourceExtractors).toContain("pdfExtractionFailureMessage");
   });
 
+  it("should document opt-in trajectory workflow in docs/api.md (issue #80, criterion #7)", () => {
+    const api = readFile(join(rootDir, "docs", "api.md"));
+    expect(api).toContain("wiki_capture_trajectory");
+    expect(api).toContain("wiki_retro");
+    expect(api).toContain("wiki_observe");
+    expect(api).toContain("opt-in");
+    expect(api).toContain("off by default");
+    expect(api).toContain("working-memory");
+  });
+
   it("should have a comprehensive README with install instructions", () => {
     const readme = readFile(join(rootDir, "README.md"));
     expect(readme).toContain("@zosmaai/pi-llm-wiki");
@@ -169,6 +179,16 @@ describe("skill frontmatter validation", () => {
     expect(name.length).toBeLessThanOrEqual(64);
     expect(name).not.toContain("--");
     expect(name).not.toMatch(/^-|-$/);
+  });
+
+  it("should contain the agent working-memory decision table (issue #80, criterion #7)", () => {
+    const content = readFile(skillPath);
+    expect(content).toContain("When to use which memory tool");
+    expect(content).toContain("wiki_capture_trajectory");
+    expect(content).toContain("wiki_retro");
+    expect(content).toContain("wiki_observe");
+    expect(content).toContain("replayable");
+    expect(content).toContain("prose **insight");
   });
 
   it("should have a description under 1024 characters", () => {
