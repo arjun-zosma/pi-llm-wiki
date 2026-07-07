@@ -1,5 +1,5 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   type VaultPaths,
   extractWikilinks,
@@ -7,7 +7,6 @@ import {
   fmtDate,
   parseFrontmatter,
   readJson,
-  readText,
   writeJson,
 } from "./utils.js";
 
