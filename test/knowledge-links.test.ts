@@ -69,15 +69,9 @@ describe("knowledge links", () => {
     expect(() =>
       buildResolvedBacklinks("concepts/source", "[bad](bad%ZZ.md)", known),
     ).not.toThrow();
-    const result = buildResolvedBacklinks(
-      "concepts/source",
-      "[bad](bad%ZZ.md)",
-      known,
-    );
+    const result = buildResolvedBacklinks("concepts/source", "[bad](bad%ZZ.md)", known);
     expect(result.targets).toEqual([]);
-    expect(result.diagnostics.map((diagnostic) => diagnostic.code)).toEqual([
-      "link_unresolved",
-    ]);
+    expect(result.diagnostics.map((diagnostic) => diagnostic.code)).toEqual(["link_unresolved"]);
   });
 
   it("requires md suffix for root-relative Markdown links", () => {

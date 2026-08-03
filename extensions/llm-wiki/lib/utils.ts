@@ -5,7 +5,6 @@ import {
   readdirSync,
   renameSync,
   rmdirSync,
-  statSync,
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
@@ -134,12 +133,12 @@ export function isPersonalVault(paths: VaultPaths): boolean {
  * 4. Fallback: ~/.llm-wiki/ (create personal wiki)
  */
 export function resolveVaultRoot(cwd: string): string {
-  // An explicit WIKI_HOME is a testable/user-selected override and must win
+  // A vault rooted at cwd is always the project-local choice.
+  if (detectVaultFormat(cwd) !== "none") return cwd;
+
+  // An explicit WIKI_HOME is a testable/user-selected fallback and must win
   // over an unrelated personal vault found while walking parent directories.
   if (process.env.WIKI_HOME) return process.env.WIKI_HOME;
-
-  // Check for any vault format at cwd
-  if (detectVaultFormat(cwd) !== "none") return cwd;
 
   // Walk up looking for a vault sentinel (new or legacy)
   let dir = cwd;
@@ -273,103 +272,6 @@ function nextSequentialId(dir: string, kind: string): string {
   const last = dirs[dirs.length - 1];
   const num = Number.parseInt(last.slice(-3), 10);
   return `${prefix}-${String(num + 1).padStart(3, "0")}`;
-}
-
-/** Parse a small, dependency-free YAML scalar/inline-array value. */
-function parseFrontmatterValue(raw: string, unquote = false): unknown {
-  const trimmed = raw.trim();
-  const unquoted = (value: string) => value.replace(/^(["'])(.*)\1$/, "$2").trim();
-
-  if (!trimmed) return "";
-
-  if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
-    const inner = trimmed.slice(1, -1).trim();
-    if (!inner) return [];
-    return inner.split(",").map((item) => unquoted(item.trim()));
-  }
-
-  return unquote ? unquoted(trimmed) : trimmed;
-}
-
-/** Extract frontmatter from markdown. */
-export function parseFrontmatter(content: string): {
-  frontmatter: Record<string, unknown>;
-  body: string;
-} {
-  const match = content.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
-  if (!match) return { frontmatter: {}, body: content };
-
-  const frontmatter: Record<string, unknown> = {};
-  const lines = match[1].split("\n");
-  let currentListKey: string | null = null;
-
-  for (const line of lines) {
-    const listMatch = line.match(/^\s*-\s+(.*)$/);
-    if (listMatch && currentListKey) {
-      const current = frontmatter[currentListKey];
-      const list = Array.isArray(current) ? current : [];
-      list.push(parseFrontmatterValue(listMatch[1], true));
-      frontmatter[currentListKey] = list;
-      continue;
-    }
-
-    const idx = line.indexOf(":");
-    if (idx <= 0) {
-      currentListKey = null;
-      continue;
-    }
-
-    const key = line.slice(0, idx).trim();
-    const val = line.slice(idx + 1).trim();
-
-    if (!val) {
-      frontmatter[key] = [];
-      currentListKey = key;
-    } else {
-      frontmatter[key] = parseFrontmatterValue(val);
-      currentListKey = null;
-    }
-  }
-  return { frontmatter, body: match[2] };
-}
-
-/** Find all wiki pages recursively. */
-export function findWikiPages(
-  wikiDir: string,
-): Array<{ path: string; relative: string; content: string }> {
-  const results: Array<{ path: string; relative: string; content: string }> = [];
-
-  function walk(dir: string, rel: string) {
-    if (!existsSync(dir)) return;
-    for (const entry of readdirSync(dir)) {
-      const full = join(dir, entry);
-      const stat = statSync(full);
-      if (stat.isDirectory()) {
-        walk(full, rel ? `${rel}/${entry}` : entry);
-      } else if (entry.endsWith(".md")) {
-        results.push({
-          path: full,
-          relative: rel ? `${rel}/${entry.slice(0, -3)}` : entry.slice(0, -3),
-          content: readFileSync(full, "utf-8"),
-        });
-      }
-    }
-  }
-
-  walk(wikiDir, "");
-  return results;
-}
-
-/** Extract all [[wikilinks]] from content. */
-export function extractWikilinks(content: string): string[] {
-  const links: string[] = [];
-  const regex = /\[\[([^\]|]+)(?:\|[^\]]*)?\]\]/g;
-  let m: RegExpExecArray | null = regex.exec(content);
-  while (m !== null) {
-    links.push(m[1]);
-    m = regex.exec(content);
-  }
-  return links;
 }
 
 /** Slugify a title. */

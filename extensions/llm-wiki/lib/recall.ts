@@ -21,6 +21,7 @@ import {
   readJson,
   resolveVaultPaths,
 } from "./utils.js";
+import { inspectVaultFormat } from "./vault-format.js";
 
 // ─── Public API ────────────────────────────────────────
 
@@ -406,7 +407,9 @@ export function searchWiki(
 
   for (const [id, entry] of Object.entries(registry.pages)) {
     const pagePath = join(paths.wiki, `${id}.md`);
+    const pageExists = existsSync(pagePath);
     const parsed = parsePage(pagePath, id);
+    if (pageExists && !parsed) continue;
     const frontmatter = parsed?.frontmatter ?? {};
     const body = parsed?.body ?? "";
 
@@ -972,6 +975,10 @@ export function registerWikiRecall(pi: ExtensionAPI, runtime?: Runtime): void {
       }
 
       const maxResults = Math.min(params.max_results ?? 5, 10);
+      const vaultDiagnostics = inspectVaultFormat(paths).diagnostics;
+      const diagnosticText = vaultDiagnostics.length
+        ? `\n\nDiagnostics: ${vaultDiagnostics.map((diagnostic) => diagnostic.code).join(", ")}`
+        : "";
       // Use layered hybrid search: personal vault + project vault, blending
       // lexical scoring with precomputed semantic embeddings when available.
       // No embeddings / no embedder => pure lexical, no network call.
@@ -985,10 +992,14 @@ export function registerWikiRecall(pi: ExtensionAPI, runtime?: Runtime): void {
           content: [
             {
               type: "text",
-              text: `No wiki pages found matching "${params.query}". The wiki is empty — use wiki_retro to start building knowledge.`,
+              text: `No wiki pages found matching "${params.query}". The wiki is empty — use wiki_retro to start building knowledge.${diagnosticText}`,
             },
           ],
-          details: { query: params.query, matches: [] } as Record<string, unknown>,
+          details: {
+            query: params.query,
+            matches: [],
+            diagnostics: vaultDiagnostics,
+          } as Record<string, unknown>,
         };
       }
 
@@ -1009,19 +1020,22 @@ export function registerWikiRecall(pi: ExtensionAPI, runtime?: Runtime): void {
             return `${i + 1}. [[${r.id}]] — ${r.title} (${r.type}, score ${r.score.toFixed(1)})${vault}\n   Path: ${r.path}${tail}`;
           })
           .join("\n");
-        const text = [
-          `Found ${results.length} wiki page(s) matching "${params.query}"${layerTag} (two-stage recall — ranked links, expand on demand):`,
-          "",
-          linkLines,
-          "",
-          "Call `read` on the path(s) you need to pull full content.",
-        ].join("\n");
+        const text =
+          [
+            `Found ${results.length} wiki page(s) matching "${params.query}"${layerTag} (two-stage recall — ranked links, expand on demand):`,
+            "",
+            linkLines,
+            "",
+            "Call `read` on the path(s) you need to pull full content.",
+          ].join("\n") + diagnosticText;
         return {
           content: [{ type: "text", text }],
-          details: { query: params.query, mode: "links", matches: results } as Record<
-            string,
-            unknown
-          >,
+          details: {
+            query: params.query,
+            mode: "links",
+            matches: results,
+            diagnostics: vaultDiagnostics,
+          } as Record<string, unknown>,
         };
       }
 
@@ -1034,13 +1048,15 @@ export function registerWikiRecall(pi: ExtensionAPI, runtime?: Runtime): void {
                 const vault = r.vaultLabel ? ` ${r.vaultLabel}` : "";
                 return `## [[${r.id}]] — ${r.title}${vault}\nType: ${r.type}\nPath: ${r.path}\n\n${r.preview}`;
               })
-              .join("\n\n---\n\n")}`,
+              .join("\n\n---\n\n")}${diagnosticText}`,
           },
         ],
-        details: { query: params.query, mode: "preview", matches: results } as Record<
-          string,
-          unknown
-        >,
+        details: {
+          query: params.query,
+          mode: "preview",
+          matches: results,
+          diagnostics: vaultDiagnostics,
+        } as Record<string, unknown>,
       };
     },
   });

@@ -2,8 +2,8 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 
 import { join, relative } from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "typebox";
-import { launchEmbedPages, reindexEmbeddings, resolveEmbedder } from "./embeddings.js";
 import { bootstrapVault } from "./bootstrap.js";
+import { launchEmbedPages, reindexEmbeddings, resolveEmbedder } from "./embeddings.js";
 import { scheduleReindex } from "./indexing.js";
 import { runIngestSynthesis } from "./ingest-worker.js";
 import {
@@ -11,6 +11,7 @@ import {
   serializeKnowledgeDocument,
   writeKnowledgeDocumentFile,
 } from "./knowledge-document.js";
+import { buildResolvedBacklinks } from "./knowledge-links.js";
 import { type Registry, appendEvent, rebuildMetadata, rebuildMetadataLight } from "./metadata.js";
 import type { Runtime } from "./runtime.js";
 import { captureFile, captureText, captureUrl } from "./source-packet.js";
@@ -18,9 +19,6 @@ import { parseModelRef } from "./task-config.js";
 import {
   type VaultPaths,
   detectVaultFormat,
-  ensureVaultStructure,
-  extractWikilinks,
-  findWikiPages,
   fmtDate,
   getVaultPaths,
   readJson,
@@ -28,7 +26,12 @@ import {
   slugify,
   writeJson,
 } from "./utils.js";
-import { inspectWritableVault } from "./vault-format.js";
+import {
+  assertWritableVault,
+  compareCodePoint,
+  discoverKnowledgeDocuments,
+  inspectWritableVault,
+} from "./vault-format.js";
 
 /**
  * All LLM Wiki custom tools.
@@ -195,7 +198,9 @@ export function registerWikiCaptureSource(pi: ExtensionAPI, runtime?: Runtime): 
       const vaultCheck = inspectWritableVault(paths);
       if (!vaultCheck.ok) {
         return {
-          content: [{ type: "text", text: `Wiki vault error: ${vaultCheck.diagnostics[0].message}` }],
+          content: [
+            { type: "text", text: `Wiki vault error: ${vaultCheck.diagnostics[0].message}` },
+          ],
           details: {
             error: vaultCheck.diagnostics[0].code,
             diagnostics: vaultCheck.diagnostics,
@@ -297,7 +302,9 @@ export function registerWikiIngest(pi: ExtensionAPI, runtime?: Runtime): void {
       const vaultCheck = inspectWritableVault(paths);
       if (!vaultCheck.ok) {
         return {
-          content: [{ type: "text", text: `Wiki vault error: ${vaultCheck.diagnostics[0].message}` }],
+          content: [
+            { type: "text", text: `Wiki vault error: ${vaultCheck.diagnostics[0].message}` },
+          ],
           details: {
             error: vaultCheck.diagnostics[0].code,
             diagnostics: vaultCheck.diagnostics,
@@ -823,88 +830,90 @@ export function registerWikiLint(pi: ExtensionAPI, runtime?: Runtime): void {
  * run off-thread via `dispatchReported`). Returns the human-readable summary.
  */
 function runWikiLint(paths: VaultPaths, autoFix: boolean): string {
-  // Ensure metadata is current
-  rebuildMetadata(paths);
-  const registry = readJson<Registry>(join(paths.meta, "registry.json"), {
-    version: "1.0",
-    last_updated: "",
-    pages: {},
-  });
-  const pages = findWikiPages(paths.wiki);
+  assertWritableVault(paths);
+  const projection = rebuildMetadata(paths);
+  if (!projection.ok) {
+    return [
+      "# Wiki Lint Report",
+      "",
+      "Projection-blocking diagnostics:",
+      ...projection.diagnostics.map(
+        (diagnostic) => `- ${diagnostic.code}: ${diagnostic.path}: ${diagnostic.message}`,
+      ),
+    ].join("\n");
+  }
 
+  const discovery = discoverKnowledgeDocuments(paths);
+  const pages = discovery.documents;
+  const knownIds = new Set(pages.map((page) => page.id));
+  const inbound = Object.fromEntries(pages.map((page) => [page.id, 0]));
+  const gapSources = new Map<string, Set<string>>();
   const findings: string[] = [];
-  let orphans = 0;
   let missingPages = 0;
   let contradictions = 0;
-  const gaps: Array<{ topic: string; mentionedBy: string[] }> = [];
-
-  const allPageIds = new Set(pages.map((p) => p.relative));
-  const linkCounts: Record<string, number> = {};
 
   for (const page of pages) {
-    const links = extractWikilinks(page.content);
-    for (const link of links) {
-      if (!allPageIds.has(link)) {
-        missingPages++;
-        findings.push(`Missing page: [[${link}]] (in [[${page.relative}]])`);
-        const existing = gaps.find((g) => g.topic === link);
-        if (existing) {
-          if (!existing.mentionedBy.includes(page.relative))
-            existing.mentionedBy.push(page.relative);
-        } else {
-          gaps.push({ topic: link, mentionedBy: [page.relative] });
-        }
-      } else {
-        linkCounts[link] = (linkCounts[link] || 0) + 1;
-      }
+    const resolved = buildResolvedBacklinks(page.id, page.body, knownIds);
+    for (const target of resolved.targets) inbound[target]++;
+    for (const unresolved of resolved.unresolved) {
+      const sources = gapSources.get(unresolved.target) ?? new Set<string>();
+      sources.add(page.id);
+      gapSources.set(unresolved.target, sources);
+      missingPages++;
+      findings.push(`Missing page: ${unresolved.target} (in ${page.id})`);
     }
   }
 
+  let orphans = 0;
   for (const page of pages) {
-    if (!linkCounts[page.relative] || linkCounts[page.relative] === 0) {
+    if (inbound[page.id] === 0) {
       orphans++;
-      findings.push(`Orphan: [[${page.relative}]] has no inbound links`);
+      findings.push(`Orphan: ${page.id} has no inbound links`);
     }
-  }
-
-  for (const page of pages) {
-    if (page.content.includes("⚠️ **Contradiction")) {
+    if (page.body.includes("⚠️ **Contradiction")) {
       contradictions++;
-      findings.push(`Contradiction flagged in [[${page.relative}]]`);
+      findings.push(`Contradiction flagged in ${page.id}`);
     }
   }
 
+  const gaps = [...gapSources.entries()]
+    .map(([topic, sources]) => ({ topic, mentionedBy: [...sources].sort(compareCodePoint) }))
+    .sort((left, right) => compareCodePoint(left.topic, right.topic));
   let fixesApplied = 0;
   if (autoFix) {
     for (const gap of gaps) {
-      if (gap.mentionedBy.length >= 2) {
-        const folder = gap.topic.includes("/") ? gap.topic.split("/")[0] : "concepts";
-        const name = gap.topic.includes("/") ? gap.topic.split("/").pop()! : gap.topic;
-        const pagePath = join(paths.wiki, folder, `${name}.md`);
-        mkdirSync(join(paths.wiki, folder), { recursive: true });
-        try {
-          // Atomic create-if-absent: the `wx` flag fails with EEXIST instead of
-          // overwriting, avoiding the existsSync→write TOCTOU race (CodeQL).
-          const doc = createKnowledgeDocument(
-            `concepts/${name}.md`,
-            {
-              type: "concept",
-              title: name.replace(/-/g, " "),
-              created: fmtDate(),
-              updated: fmtDate(),
-              status: "stub",
-            },
-            `_Stub auto-created by lint. Expand with content from: ${gap.mentionedBy.map((r) => `[${r}](/${r}.md)`).join(", ")}_`,
-          );
-          writeFileSync(pagePath, serializeKnowledgeDocument(doc), {
-            encoding: "utf-8",
-            flag: "wx",
-          });
-          fixesApplied++;
-        } catch (err) {
-          // Page already exists — nothing to fix. Re-throw anything else.
-          if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
-        }
+      if (gap.mentionedBy.length < 2) continue;
+      const parts = gap.topic.split("/");
+      const name =
+        parts.length === 1
+          ? parts[0]
+          : parts.length === 2 && parts[0] === "concepts"
+            ? parts[1]
+            : "";
+      if (!name || slugify(name) !== name) continue;
+      const pagePath = join(paths.wiki, "concepts", `${name}.md`);
+      mkdirSync(join(paths.wiki, "concepts"), { recursive: true });
+      const document = createKnowledgeDocument(
+        `concepts/${name}.md`,
+        {
+          type: "concept",
+          title: name.replace(/-/g, " "),
+          created: fmtDate(),
+          updated: fmtDate(),
+          status: "stub",
+        },
+        `_Stub auto-created by lint. Expand with content from: ${gap.mentionedBy
+          .map((source) => `[${source}](/${source}.md)`)
+          .join(", ")}_`,
+      );
+      try {
+        writeFileSync(pagePath, serializeKnowledgeDocument(document), {
+          encoding: "utf8",
+          flag: "wx",
+        });
+        fixesApplied++;
+      } catch (error: unknown) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
       }
     }
   }
@@ -913,7 +922,6 @@ function runWikiLint(paths: VaultPaths, autoFix: boolean): string {
     gaps,
     generated: new Date().toISOString(),
   });
-
   const reportLines = [
     "# Wiki Lint Report",
     `Generated: ${fmtDate()}`,
@@ -926,14 +934,12 @@ function runWikiLint(paths: VaultPaths, autoFix: boolean): string {
     autoFix ? `- Fixes applied: ${fixesApplied}` : "",
     "",
     "## Findings",
-    findings.length > 0 ? findings.map((f) => `- ${f}`).join("\n") : "✅ No issues found!",
+    findings.length ? findings.map((finding) => `- ${finding}`).join("\n") : "✅ No issues found!",
     "",
   ].filter(Boolean);
-
   const reportPath = join(paths.outputs, `lint-${fmtDate()}.md`);
   mkdirSync(paths.outputs, { recursive: true });
-  writeFileSync(reportPath, `${reportLines.join("\n")}\n`, "utf-8");
-
+  writeFileSync(reportPath, `${reportLines.join("\n")}\n`, "utf8");
   appendEvent(paths, {
     kind: "lint",
     orphans,
@@ -941,7 +947,6 @@ function runWikiLint(paths: VaultPaths, autoFix: boolean): string {
     contradictions,
     auto_fix: autoFix,
   });
-
   rebuildMetadataLight(paths);
 
   return [
@@ -954,7 +959,7 @@ function runWikiLint(paths: VaultPaths, autoFix: boolean): string {
     autoFix ? `- Auto-fixes: ${fixesApplied}` : "",
     "",
     `📄 Report: \`${reportPath}\``,
-    gaps.length > 0 ? `💡 ${gaps.length} knowledge gap(s) tracked` : "",
+    gaps.length ? `💡 ${gaps.length} knowledge gap(s) tracked` : "",
   ]
     .filter(Boolean)
     .join("\n");
@@ -1187,14 +1192,31 @@ export function registerWikiLogEvent(pi: ExtensionAPI): void {
         };
       }
 
-      appendEvent(paths, { kind: params.kind, ...params.details });
+      const kind = typeof params.kind === "string" ? params.kind.trim() : "";
+      if (!kind) {
+        return {
+          content: [{ type: "text", text: "Event kind must be a non-empty string" }],
+          details: { error: "event_missing_kind" } as Record<string, unknown>,
+          isError: true,
+        };
+      }
+      const details = params.details ?? {};
+      if (Object.hasOwn(details, "kind") || Object.hasOwn(details, "timestamp")) {
+        return {
+          content: [{ type: "text", text: "Event details cannot override kind or timestamp" }],
+          details: { error: "event_reserved_field" } as Record<string, unknown>,
+          isError: true,
+        };
+      }
+
+      appendEvent(paths, { kind, ...details });
 
       // Regenerate projections
       rebuildMetadata(paths);
 
       return {
-        content: [{ type: "text", text: `✅ Event logged: ${params.kind}` }],
-        details: { kind: params.kind } as Record<string, unknown>,
+        content: [{ type: "text", text: `✅ Event logged: ${kind}` }],
+        details: { kind } as Record<string, unknown>,
       };
     },
   });

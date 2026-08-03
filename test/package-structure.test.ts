@@ -1,7 +1,18 @@
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { readFile, rootDir } from "./helpers.js";
+
+function readProductionFiles(directory: string): string[] {
+  const contents: string[] = [];
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    if (["node_modules", "dist", "coverage"].includes(entry.name)) continue;
+    const path = join(directory, entry.name);
+    if (entry.isDirectory()) contents.push(...readProductionFiles(path));
+    else if (entry.isFile() && entry.name.endsWith(".ts")) contents.push(readFile(path));
+  }
+  return contents;
+}
 
 describe("package structure", () => {
   it("should have a valid package.json with pi manifest", () => {
@@ -149,6 +160,44 @@ describe("package structure", () => {
     expect(api).toContain("opt-in");
     expect(api).toContain("off by default");
     expect(api).toContain("working-memory");
+  });
+
+  it("has no obsolete YAML or wikilink scanners", () => {
+    const utils = readFile(join(rootDir, "extensions/llm-wiki/lib/utils.ts"));
+    expect(utils).not.toContain("parseFrontmatter(");
+    expect(utils).not.toContain("findWikiPages(");
+    expect(utils).not.toContain("extractWikilinks(");
+  });
+
+  it("routes every authoritative writer through strict vault validation", () => {
+    const files = [
+      "source-packet.ts",
+      "ingest-worker.ts",
+      "observation.ts",
+      "retro.ts",
+      "trajectory.ts",
+      "metadata.ts",
+      "embeddings.ts",
+    ];
+    for (const file of files) {
+      const source = readFile(join(rootDir, "extensions/llm-wiki/lib", file));
+      expect(source, file).toContain("assertWritableVault");
+    }
+  });
+
+  it("keeps Foundation free of later-phase operation surfaces", () => {
+    const source = [join(rootDir, "extensions"), join(rootDir, "mcp")]
+      .flatMap(readProductionFiles)
+      .join("\n");
+    for (const forbidden of [
+      "wiki_okf_import",
+      "wiki_okf_export",
+      "wiki_okf_migrate",
+      "transaction journal",
+      "trust factor",
+    ]) {
+      expect(source).not.toContain(forbidden);
+    }
   });
 
   it("should have a comprehensive README with install instructions", () => {

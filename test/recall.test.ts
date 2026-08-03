@@ -1,12 +1,13 @@
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   type Embedder,
   embeddingStorePath,
   normalizeVector,
 } from "../extensions/llm-wiki/lib/embeddings.js";
-import { rebuildMetadataLight } from "../extensions/llm-wiki/lib/metadata.js";
+import { rebuildMetadata, rebuildMetadataLight } from "../extensions/llm-wiki/lib/metadata.js";
 import {
   DEFAULT_RECALL_LINKS_THRESHOLD,
   DEFAULT_SEMANTIC_WEIGHT,
@@ -15,6 +16,7 @@ import {
   __clearQueryEmbeddingCache,
   formatRecallContext,
   fuseScores,
+  registerWikiRecall,
   searchWiki,
   searchWikiHybrid,
   searchWikiLayered,
@@ -68,6 +70,10 @@ describe("wiki recall", () => {
       return dir;
     })();
     ensureVaultStructure(getVaultPaths(wikiDir));
+    writeFileSync(
+      join(getVaultPaths(wikiDir).dotWiki, "config.json"),
+      JSON.stringify({ name: "Recall test" }),
+    );
   });
 
   afterEach(() => {
@@ -100,6 +106,50 @@ describe("wiki recall", () => {
     );
     return `${folder}/${name}`;
   }
+
+  it("skips a now-malformed page retained in the known-good registry", () => {
+    const id = createRegistryPage("good", "concept", "Good", "needle body", {
+      summary: "needle body",
+    });
+    const paths = getVaultPaths(wikiDir);
+    expect(rebuildMetadata(paths).ok).toBe(true);
+    writeFileSync(join(paths.wiki, `${id}.md`), "broken\n");
+    expect(searchWiki(paths, "needle", 5)).toEqual([]);
+  });
+
+  it("surfaces version diagnostics in Pi recall including no-match responses", async () => {
+    const paths = getVaultPaths(wikiDir);
+    writeFileSync(
+      join(paths.dotWiki, "config.json"),
+      JSON.stringify({ knowledge_format: "okf-0.2" }),
+    );
+    expect(rebuildMetadata(paths).ok).toBe(true);
+    writeFileSync(join(paths.wiki, "index.md"), '---\nokf_version: "0.3"\n---\n');
+
+    let captured:
+      | {
+          execute: (...args: unknown[]) => Promise<{
+            content: Array<{ text: string }>;
+            details: { diagnostics: Array<{ code: string }> };
+          }>;
+        }
+      | undefined;
+    const pi = {
+      registerTool: (tool: typeof captured) => {
+        captured = tool;
+      },
+    } as unknown as ExtensionAPI;
+    registerWikiRecall(pi);
+    if (!captured) throw new Error("wiki_recall was not registered");
+    const response = await captured.execute("id", { query: "absent" }, undefined, undefined, {
+      cwd: paths.root,
+      hasUI: false,
+    });
+    expect(
+      response.details.diagnostics.map((diagnostic: { code: string }) => diagnostic.code),
+    ).toContain("okf_version_mismatch");
+    expect(response.content[0].text).toContain("okf_version_mismatch");
+  });
 
   it("should return empty results when wiki has no pages", () => {
     const paths = getVaultPaths(wikiDir);

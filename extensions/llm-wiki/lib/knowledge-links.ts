@@ -13,8 +13,14 @@ export interface KnowledgeLinks {
   wikilinks: ExtractedLink[];
 }
 
+export interface UnresolvedKnowledgeLink {
+  target: string;
+  syntax: "markdown" | "wikilink";
+}
+
 export interface ResolvedBacklinks {
   targets: string[];
+  unresolved: UnresolvedKnowledgeLink[];
   diagnostics: KnowledgeDiagnostic[];
 }
 
@@ -113,7 +119,12 @@ export function extractLegacyWikilinks(body: string): ExtractedLink[] {
 function resolveMarkdownTarget(
   target: string,
   sourceId: string,
-): { kind: "concept"; id: string } | { kind: "escape" } | { kind: "external" } | { kind: "empty" } | { kind: "invalid" } {
+):
+  | { kind: "concept"; id: string }
+  | { kind: "escape" }
+  | { kind: "external" }
+  | { kind: "empty" }
+  | { kind: "invalid" } {
   // Strip query and fragment (earliest delimiter)
   const qIndex = target.indexOf("?");
   const fIndex = target.indexOf("#");
@@ -204,6 +215,7 @@ export function buildResolvedBacklinks(
   knownIds: Set<string>,
 ): ResolvedBacklinks {
   const diagnostics: KnowledgeDiagnostic[] = [];
+  const unresolved: UnresolvedKnowledgeLink[] = [];
   const targets = new Set<string>();
   const allLinks = extractKnowledgeLinks(body);
 
@@ -233,6 +245,7 @@ export function buildResolvedBacklinks(
       if (knownIds.has(normalizedId)) {
         targets.add(normalizedId);
       } else {
+        unresolved.push({ target: normalizedId, syntax: "markdown" });
         diagnostics.push(
           diag("warning", "link_unresolved", `${sourceId}.md`, `Unresolved link: ${normalizedId}`),
         );
@@ -249,6 +262,7 @@ export function buildResolvedBacklinks(
       if (knownIds.has(normalizedId)) {
         targets.add(normalizedId);
       } else {
+        unresolved.push({ target: normalizedId, syntax: "wikilink" });
         diagnostics.push(
           diag(
             "warning",
@@ -264,5 +278,5 @@ export function buildResolvedBacklinks(
   // Sort and deduplicate
   const sorted = [...targets].sort(compareCodePoint);
 
-  return { targets: sorted, diagnostics };
+  return { targets: sorted, unresolved, diagnostics };
 }

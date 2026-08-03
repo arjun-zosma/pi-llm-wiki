@@ -18,9 +18,9 @@ import { buildResolvedBacklinks, extractLegacyWikilinks } from "./knowledge-link
 import type { VaultPaths } from "./utils.js";
 import { readJson, writeJson } from "./utils.js";
 import {
+  assertWritableVault,
   compareCodePoint,
   discoverKnowledgeDocuments,
-  assertWritableVault,
   inspectVaultFormat,
 } from "./vault-format.js";
 
@@ -93,6 +93,9 @@ export function rebuildMetadata(paths: VaultPaths): ProjectionResult {
   const knownIds = new Set(documents.map((d) => d.id));
   const backlinks = buildBacklinks(documents, knownIds, allDiagnostics);
 
+  const eventLogResult = buildOkfLog(readText(join(paths.meta, "events.jsonl")));
+  allDiagnostics.push(...eventLogResult.diagnostics);
+
   // Step 5: Build meta/index.md
   const metaIndex = buildIndexMarkdown(registry);
 
@@ -106,9 +109,7 @@ export function rebuildMetadata(paths: VaultPaths): ProjectionResult {
       : null;
 
   const okfLog: string | null =
-    vaultState.knowledgeFormat === "okf-0.2"
-      ? buildOkfLog(readText(join(paths.meta, "events.jsonl"))).markdown
-      : null;
+    vaultState.knowledgeFormat === "okf-0.2" ? eventLogResult.markdown : null;
 
   // Step 8: Atomic write all projections
   mkdirSync(paths.meta, { recursive: true });
@@ -348,9 +349,12 @@ function buildLogMarkdown(paths: VaultPaths): string {
 /** Append an event to events.jsonl. */
 export function appendEvent(paths: VaultPaths, event: Omit<WikiEvent, "timestamp">): void {
   assertWritableVault(paths);
+  const { timestamp: _ignored, kind: rawKind, ...details } = event as WikiEvent;
+  const kind = typeof rawKind === "string" ? rawKind.trim() : "";
+  if (!kind) throw new Error("Event kind must be a non-empty string");
   mkdirSync(paths.meta, { recursive: true });
   const eventsPath = join(paths.meta, "events.jsonl");
-  const line = JSON.stringify({ timestamp: new Date().toISOString(), ...event });
+  const line = JSON.stringify({ ...details, timestamp: new Date().toISOString(), kind });
   writeFileSync(eventsPath, `${line}\n`, { flag: "a", encoding: "utf-8" });
 }
 
@@ -554,6 +558,7 @@ export function buildOkfLog(eventsJsonl: string, path = "meta/events.jsonl"): Ok
   const events: Array<{
     seq: number;
     timestamp: string;
+    epoch: number;
     date: string;
     kind: string;
     details: string;
@@ -602,7 +607,7 @@ export function buildOkfLog(eventsJsonl: string, path = "meta/events.jsonl"): Ok
         ? JSON.stringify(canonicalJsonValue(Object.fromEntries(detailEntries)))
         : "";
 
-    events.push({ seq: i, timestamp: rawTs, date, kind, details });
+    events.push({ seq: i, timestamp: rawTs, epoch: ts.getTime(), date, kind, details });
   }
 
   // Group by date
@@ -618,11 +623,7 @@ export function buildOkfLog(eventsJsonl: string, path = "meta/events.jsonl"): Ok
 
   for (const date of sortedDates) {
     const dayEvents = byDate.get(date)!;
-    dayEvents.sort((a, b) => {
-      const tsCmp = b.timestamp.localeCompare(a.timestamp);
-      if (tsCmp !== 0) return tsCmp;
-      return b.seq - a.seq;
-    });
+    dayEvents.sort((a, b) => b.epoch - a.epoch || b.seq - a.seq);
 
     outLines.push("");
     outLines.push(`## ${date}`);

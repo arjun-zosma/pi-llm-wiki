@@ -1,15 +1,26 @@
-import { mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
+import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   createKnowledgeDocument,
   serializeKnowledgeDocument,
 } from "../extensions/llm-wiki/lib/knowledge-document.js";
 import {
+  appendEvent,
   buildDirectoryIndexes,
   buildOkfLog,
   rebuildMetadata,
 } from "../extensions/llm-wiki/lib/metadata.js";
+import { registerWikiLogEvent } from "../extensions/llm-wiki/lib/tools.js";
 import { ensureVaultStructure, getVaultPaths } from "../extensions/llm-wiki/lib/utils.js";
 
 function readFixture(rel: string): string {
@@ -55,6 +66,13 @@ function writeDoc(
   writeFileSync(fullPath, serializeKnowledgeDocument(doc), "utf8");
 }
 
+type TestTool = {
+  execute: (...args: unknown[]) => Promise<{
+    isError?: boolean;
+    content: Array<{ text: string }>;
+    details: Record<string, unknown>;
+  }>;
+};
 describe("OKF projections", () => {
   it("renders empty bundle root index", () => {
     const indexes = buildDirectoryIndexes([], { name: "" });
@@ -144,9 +162,70 @@ describe("OKF projections", () => {
     expect(log.markdown).toBe("# Wiki Update Log\n");
     expect(log.diagnostics).toEqual([]);
   });
+
+  it("sorts valid offset timestamps by instant and returns malformed-event diagnostics", () => {
+    const result = buildOkfLog(
+      [
+        '{"timestamp":"2026-08-02T13:30:00Z","kind":"earlier"}',
+        '{"timestamp":"2026-08-02T09:00:00-05:00","kind":"later"}',
+        "not-json",
+      ].join("\n"),
+    );
+    expect(result.markdown.indexOf("later")).toBeLessThan(result.markdown.indexOf("earlier"));
+    expect(result.diagnostics.map((diagnostic) => diagnostic.code)).toContain("event_invalid_json");
+  });
 });
 
 describe("OKF rebuild integration", () => {
+  it.each([
+    ["legacy", false],
+    ["okf-0.2", true],
+  ] as const)(
+    "includes non-blocking event diagnostics in %s projection results",
+    (knowledgeFormat, publishesOkfLog) => {
+      const paths = createVault({ knowledge_format: knowledgeFormat });
+      writeFileSync(join(paths.meta, "events.jsonl"), "not-json\n");
+      const result = rebuildMetadata(paths);
+      expect(result.ok).toBe(true);
+      expect(result.diagnostics.map((diagnostic) => diagnostic.code)).toContain(
+        "event_invalid_json",
+      );
+      expect(existsSync(join(paths.wiki, "log.md"))).toBe(publishesOkfLog);
+    },
+  );
+
+  it("does not allow event details to override trusted timestamp or kind", () => {
+    const paths = createVault({ knowledge_format: "legacy" });
+    appendEvent(paths, { kind: "trusted", timestamp: "forged", extra: 1 } as never);
+    const event = JSON.parse(readFileSync(join(paths.meta, "events.jsonl"), "utf8"));
+    expect(event.kind).toBe("trusted");
+    expect(event.timestamp).not.toBe("forged");
+    expect(Number.isNaN(Date.parse(event.timestamp))).toBe(false);
+  });
+
+  it("rejects empty or reserved manual-event input at the Pi tool boundary", async () => {
+    const paths = createVault({ knowledge_format: "legacy" });
+    let tool: TestTool | undefined;
+    registerWikiLogEvent({
+      registerTool: (definition: unknown) => {
+        tool = definition as TestTool;
+      },
+    } as unknown as ExtensionAPI);
+    if (!tool) throw new Error("wiki_log_event was not registered");
+    for (const params of [
+      { kind: "   " },
+      { kind: "safe", details: { timestamp: "forged" } },
+      { kind: "safe", details: { kind: "forged" } },
+    ]) {
+      const result = await tool.execute("test", params, undefined, undefined, {
+        cwd: paths.root,
+        hasUI: false,
+      });
+      expect(result.isError).toBe(true);
+    }
+    expect(existsSync(join(paths.meta, "events.jsonl"))).toBe(false);
+  });
+
   it("legacy mode builds only meta/ projections and leaves wiki/index.md and wiki/log.md unchanged", () => {
     const paths = createVault({ knowledge_format: "legacy" });
     writeDoc(
