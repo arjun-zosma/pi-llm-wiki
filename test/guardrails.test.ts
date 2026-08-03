@@ -1,7 +1,7 @@
 import { mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join, sep } from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import {
   extractMutationPaths,
   hasWikiMutation,
@@ -29,7 +29,21 @@ function captureToolCallHandler(): ToolCallHandler {
   return handler;
 }
 
+const originalWikiHome = process.env.WIKI_HOME;
+const guardrailRoot = join(import.meta.dirname, "..", "tmp", `guardrail-suite-${Date.now()}`);
+process.env.WIKI_HOME = guardrailRoot;
 const vaultPaths = resolveVaultPaths(process.cwd());
+ensureVaultStructure(vaultPaths);
+writeFileSync(
+  join(vaultPaths.dotWiki, "config.json"),
+  JSON.stringify({ knowledge_format: "legacy" }),
+);
+
+afterAll(() => {
+  if (originalWikiHome === undefined) Reflect.deleteProperty(process.env, "WIKI_HOME");
+  else process.env.WIKI_HOME = originalWikiHome;
+  rmSync(guardrailRoot, { recursive: true, force: true });
+});
 
 describe("edit guardrails", () => {
   it("blocks contained wiki writes when config is malformed", () => {
