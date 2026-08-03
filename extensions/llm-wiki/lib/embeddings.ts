@@ -3,10 +3,11 @@ import { existsSync, readFileSync } from "node:fs";
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { join } from "node:path";
+import { parseKnowledgeDocument } from "./knowledge-document.js";
 import type { Registry } from "./metadata.js";
 import type { LaunchCtx, Runtime } from "./runtime.js";
 import type { TaskConfig } from "./task-config.js";
-import { type VaultPaths, parseFrontmatter, readJson, writeJson } from "./utils.js";
+import { type VaultPaths, readJson, writeJson } from "./utils.js";
 
 /**
  * Background semantic embeddings, computed at write time (issue #66, epic #63).
@@ -189,8 +190,9 @@ function readPageText(paths: VaultPaths, id: string): PageText | undefined {
   const pagePath = join(paths.wiki, `${id}.md`);
   if (!existsSync(pagePath)) return undefined;
   const raw = readFileSync(pagePath, "utf-8");
-  const { frontmatter, body } = parseFrontmatter(raw);
-  const text = buildEmbeddingText(id, frontmatter, body);
+  const result = parseKnowledgeDocument(raw, `${id}.md`);
+  if (!result.ok) return undefined;
+  const text = buildEmbeddingText(id, result.document.frontmatter, result.document.body);
   return { id, text, hash: contentHash(text) };
 }
 

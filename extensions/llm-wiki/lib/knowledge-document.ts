@@ -476,7 +476,7 @@ function parseFrontmatterBlock(
   const sources = classifySources(mapping.sources);
 
   // Split standard fields from extensions
-  const frontmatter: KnowledgeFrontmatter = { type: String(rawType).toLowerCase() };
+  const frontmatter: KnowledgeFrontmatter = { type: String(rawType) };
   const extensions: Record<string, KnowledgeValue> = {};
   const legacyFields: string[] = [];
 
@@ -573,7 +573,7 @@ export function createKnowledgeDocument(
   body: string,
   sources?: Array<Record<string, KnowledgeValue>>,
 ): KnowledgeDocument {
-  const frontmatter: KnowledgeFrontmatter = { type: fields.type.toLowerCase() };
+  const frontmatter: KnowledgeFrontmatter = { type: fields.type };
   const extensions: Record<string, KnowledgeValue> = {};
 
   for (const [key, value] of Object.entries(fields)) {

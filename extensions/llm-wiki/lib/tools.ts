@@ -750,29 +750,16 @@ export function registerWikiSearch(pi: ExtensionAPI): void {
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const paths = getPaths(ctx.cwd);
-      const registry = readJson<Registry>(join(paths.meta, "registry.json"), {
-        version: "1.0",
-        last_updated: "",
-        pages: {},
-      });
-      const q = params.query.toLowerCase();
+      const { searchRegistry } = await import("./wiki-service.js");
+      const result = searchRegistry(paths, params.query, params.type);
 
-      const matches = Object.entries(registry.pages)
-        .filter(([id, entry]) => {
-          const matchesQuery =
-            id.toLowerCase().includes(q) ||
-            String(entry.title).toLowerCase().includes(q) ||
-            String(entry.type).toLowerCase().includes(q);
-          const matchesType =
-            !params.type || String(entry.type).toLowerCase() === params.type.toLowerCase();
-          return matchesQuery && matchesType;
-        })
-        .map(([id, entry]) => ({ id, title: entry.title, type: entry.type }));
-
-      if (matches.length === 0) {
+      if (result.matches.length === 0) {
         return {
           content: [{ type: "text", text: `No pages found for "${params.query}"` }],
-          details: { query: params.query, matches: [] } as Record<string, unknown>,
+          details: { query: params.query, matches: [], diagnostics: result.diagnostics } as Record<
+            string,
+            unknown
+          >,
         };
       }
 
@@ -781,13 +768,17 @@ export function registerWikiSearch(pi: ExtensionAPI): void {
           {
             type: "text",
             text: [
-              `🔍 **${matches.length} result(s)** for "${params.query}":`,
+              `🔍 **${result.matches.length} result(s)** for "${params.query}":`,
               "",
-              ...matches.map((m) => `- [[${m.id}]] — *${m.type}* — ${m.title}`),
+              ...result.matches.map((m) => `- [[${m.id}]] — *${m.type}* — ${m.title}`),
             ].join("\n"),
           },
         ],
-        details: { query: params.query, matches } as Record<string, unknown>,
+        details: {
+          query: params.query,
+          matches: result.matches,
+          diagnostics: result.diagnostics,
+        } as Record<string, unknown>,
       };
     },
   });
@@ -987,18 +978,10 @@ export function registerWikiStatus(pi: ExtensionAPI): void {
         };
       }
 
-      const registry = readJson<Registry>(join(paths.meta, "registry.json"), {
-        version: "1.0",
-        last_updated: "",
-        pages: {},
-      });
-      const backlinks = readJson<Record<string, string[]>>(join(paths.meta, "backlinks.json"), {});
+      const { getWikiStatus } = await import("./wiki-service.js");
+      const status = getWikiStatus(paths);
       const config = readJson<Record<string, unknown>>(join(paths.dotWiki, "config.json"), {});
-
-      const byType: Record<string, number> = {};
-      for (const entry of Object.values(registry.pages)) {
-        byType[entry.type] = (byType[entry.type] || 0) + 1;
-      }
+      const backlinks = readJson<Record<string, string[]>>(join(paths.meta, "backlinks.json"), {});
 
       const orphanCount = Object.entries(backlinks).filter(
         ([, inbound]) => inbound.length === 0,
@@ -1008,23 +991,30 @@ export function registerWikiStatus(pi: ExtensionAPI): void {
       });
 
       const health =
-        Object.keys(registry.pages).length === 0
-          ? "🔴 Empty"
-          : orphanCount > 5
-            ? "⚠️ Warning"
-            : "✅ Good";
+        status.totalPages === 0 ? "🔴 Empty" : orphanCount > 5 ? "⚠️ Warning" : "✅ Good";
+
+      const diagLines =
+        status.blockingDiagnostics.length > 0
+          ? [
+              "",
+              "⚠️ Blocking diagnostics:",
+              ...status.blockingDiagnostics.map((d) => `  - ${d.code}: ${d.message}`),
+            ]
+          : [];
 
       const lines = [
         "📊 LLM Wiki Status",
         "══════════════════",
         `Topic: ${config.topic || "Unknown"}`,
         `Mode: ${config.mode || "personal"}`,
-        `Pages: ${Object.keys(registry.pages).length}`,
-        ...Object.entries(byType).map(([t, c]) => `  - ${t}s: ${c}`),
+        `Knowledge format: ${status.knowledgeFormat}`,
+        `Pages: ${status.totalPages}`,
+        ...Object.entries(status.byType).map(([t, c]) => `  - ${t}s: ${c}`),
         `Orphans: ${orphanCount}`,
         `Gaps: ${gaps.gaps?.length || 0}`,
         `Health: ${health}`,
-        `Last updated: ${registry.last_updated || "Never"}`,
+        `Last updated: ${status.lastUpdated || "Never"}`,
+        ...diagLines,
       ];
 
       return {
@@ -1032,11 +1022,13 @@ export function registerWikiStatus(pi: ExtensionAPI): void {
         details: {
           topic: config.topic,
           mode: config.mode,
-          totalPages: Object.keys(registry.pages).length,
-          byType,
+          knowledgeFormat: status.knowledgeFormat,
+          totalPages: status.totalPages,
+          byType: status.byType,
           orphans: orphanCount,
           gaps: gaps.gaps?.length || 0,
           health,
+          blockingDiagnostics: status.blockingDiagnostics,
         } as Record<string, unknown>,
       };
     },
