@@ -64,7 +64,8 @@ export function scheduleReindex(
       // that land during embedding are not lost.
       while (dirty.has(root)) {
         dirty.delete(root);
-        rebuildMetadataLight(paths);
+        const projection = rebuildMetadataLight(paths);
+        if (!projection.ok) continue;
 
         // Refresh embeddings only after metadata is consistent. Stale-aware and
         // a no-op unless an embedder is configured.
