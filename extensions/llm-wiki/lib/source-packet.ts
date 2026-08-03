@@ -1,6 +1,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { extname, join } from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { createKnowledgeDocument, serializeKnowledgeDocument } from "./knowledge-document.js";
 import { appendEvent } from "./metadata.js";
 import {
   type ExtractedContent,
@@ -268,16 +269,7 @@ function buildSourcePageSkeleton(manifest: Record<string, unknown>, extracted: s
     .trim()
     .slice(0, 500);
 
-  return `---
-type: source
-format: ${format}
-source_id: ${id}
-raw_path: raw/sources/${id}/extracted.md
-captured: ${captured}
-status: skeleton
----
-
-# ${title}${url}
+  const body = `# ${title}${url}
 
 ## Summary
 
@@ -293,11 +285,11 @@ status: skeleton
 
 ## Entities Mentioned
 
-- [[entity-name]]
+- [entity-name](/entities/entity-name.md)
 
 ## Concepts Mentioned
 
-- [[concept-name]]
+- [concept-name](/concepts/concept-name.md)
 
 ## Notable Quotes
 
@@ -305,8 +297,23 @@ status: skeleton
 
 ## Source Packet
 
-- **ID:** \`[[sources/${id}]]\`
+- **ID:** \`sources/${id}\`
 - **Extracted:** [raw/sources/${id}/extracted.md](../raw/sources/${id}/extracted.md)
 - **Manifest:** [raw/sources/${id}/manifest.json](../raw/sources/${id}/manifest.json)
 `;
+
+  const doc = createKnowledgeDocument(
+    `sources/${id}.md`,
+    {
+      type: "source",
+      title,
+      format,
+      source_id: id,
+      raw_path: `raw/sources/${id}/extracted.md`,
+      captured,
+      status: "skeleton",
+    },
+    body,
+  );
+  return serializeKnowledgeDocument(doc);
 }

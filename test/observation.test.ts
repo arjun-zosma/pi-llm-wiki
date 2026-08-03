@@ -78,8 +78,10 @@ describe("wiki observation", () => {
     expect(content).toContain("Observation: JWT auth middleware added");
     expect(content).toContain("User decided to use JWT with refresh tokens");
     expect(content).toContain("relevance: high");
-    expect(content).toContain('tags: ["auth", "jwt", "backend"]');
-    expect(content).toContain('source_context: "Adding authentication module"');
+    expect(content).toContain("- auth");
+    expect(content).toContain("- jwt");
+    expect(content).toContain("- backend");
+    expect(content).toContain("source_context: Adding authentication module");
   });
 
   it("should save an observation with default optional fields", () => {

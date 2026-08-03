@@ -40,8 +40,8 @@ describe("buildIngestedSourcePage", () => {
     expect(page).toContain("# Attention Is All You Need");
     expect(page).toContain("Transformer architecture");
     expect(page).toContain("- Self-attention scales well");
-    expect(page).toContain("[[concepts/self-attention]]");
-    expect(page).toContain("[[entities/google-brain]]");
+    expect(page).toContain("[Self-Attention](/concepts/self-attention.md)");
+    expect(page).toContain("[Google Brain](/entities/google-brain.md)");
     expect(page).toContain("> Attention is all you need — Vaswani et al.");
     expect(page).toContain("⚠️ **Contradiction**");
     expect(page).toContain("[https://example.com/paper]");
@@ -80,6 +80,8 @@ describe("commitSynthesis", () => {
     const paths = getVaultPaths(wikiDir);
     const res = commitSynthesis(paths, "SRC-001", MANIFEST, DATA, "2026-06-06");
 
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
     const sourcePage = readFileSync(join(paths.wiki, "sources", "SRC-001.md"), "utf-8");
     expect(sourcePage).toContain("status: ingested");
 
@@ -98,6 +100,8 @@ describe("commitSynthesis", () => {
 
     const res = commitSynthesis(paths, "SRC-001", MANIFEST, DATA, "2026-06-06");
 
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
     expect(res.entitiesLinked).toContain("google-brain");
     expect(res.entitiesCreated).not.toContain("google-brain");
     expect(readFileSync(existing, "utf-8")).toBe("PRE-EXISTING CONTENT");
@@ -105,7 +109,8 @@ describe("commitSynthesis", () => {
 
   it("appends an ingest event and rebuilds registry on metadata rebuild", () => {
     const paths = getVaultPaths(wikiDir);
-    commitSynthesis(paths, "SRC-001", MANIFEST, DATA, "2026-06-06");
+    const res = commitSynthesis(paths, "SRC-001", MANIFEST, DATA, "2026-06-06");
+    expect(res.ok).toBe(true);
     const events = readFileSync(join(paths.meta, "events.jsonl"), "utf-8");
     expect(events).toContain('"kind":"ingest"');
     expect(events).toContain('"source_id":"SRC-001"');
@@ -127,6 +132,8 @@ describe("commitSynthesis", () => {
       "2026-06-06",
     );
     // Non-alphanumeric titles fall back to "untitled" slug.
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
     expect(res.entitiesCreated).toEqual(["untitled"]);
   });
 });

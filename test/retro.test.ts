@@ -68,7 +68,7 @@ describe("wiki retro", () => {
     expect(existsSync(result.sourcePagePath)).toBe(true);
     const sourcePage = readFile(result.sourcePagePath);
     expect(sourcePage).toContain("type: source");
-    expect(sourcePage).toContain('title: "Test Pattern"');
+    expect(sourcePage).toContain("title: Test Pattern");
     expect(sourcePage).toContain("slug: test-pattern");
     expect(sourcePage).toContain("status: insight");
     expect(sourcePage).toContain("This is a test insight.");

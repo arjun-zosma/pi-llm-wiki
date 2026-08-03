@@ -1,8 +1,13 @@
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "typebox";
 import { scheduleReindex } from "./indexing.js";
+import {
+  createKnowledgeDocument,
+  serializeKnowledgeDocument,
+  writeKnowledgeDocumentFile,
+} from "./knowledge-document.js";
 import { appendEvent, rebuildMetadataLight } from "./metadata.js";
 import type { Runtime } from "./runtime.js";
 import { type VaultPaths, fmtDate, resolveVaultPaths } from "./utils.js";
@@ -34,39 +39,35 @@ export function saveInsight(
 ): RetroResult {
   const today = fmtDate();
 
-  // Write a single markdown file to wiki/sources/{slug}.md
-  const sourcePageDir = join(paths.wiki, "sources");
-  mkdirSync(sourcePageDir, { recursive: true });
-  const sourcePagePath = join(sourcePageDir, `${slug}.md`);
+  const sourcePagePath = join(paths.wiki, "sources", `${slug}.md`);
 
-  const pageContent = [
-    "---",
-    "type: source",
-    `title: "${title}"`,
-    `slug: ${slug}`,
-    "status: insight",
-    `created: ${today}`,
-    `updated: ${today}`,
-    category ? `category: ${category}` : "",
-    "---",
-    "",
-    `# ${title}`,
-    "",
-    body,
-    "",
-    category ? `*Category: ${category}*` : "",
-    "",
-    "---",
-    `*Captured: ${today}*`,
-    "",
-    "## Related",
-    "",
-    "_Add links to related pages._",
-    "",
-  ]
-    .filter((l) => l !== "")
-    .join("\n");
-  writeFileSync(sourcePagePath, pageContent, "utf-8");
+  const pageBody = `# ${title}
+
+${body}
+
+${category ? `*Category: ${category}*` : ""}
+
+---
+*Captured: ${today}*
+
+## Related
+
+_Add links to related pages._`;
+
+  const doc = createKnowledgeDocument(
+    `sources/${slug}.md`,
+    {
+      type: "source",
+      title,
+      slug,
+      status: "insight",
+      created: today,
+      updated: today,
+      ...(category ? { category } : {}),
+    },
+    pageBody,
+  );
+  writeKnowledgeDocumentFile(sourcePagePath, doc);
 
   // Log event
   appendEvent(paths, {

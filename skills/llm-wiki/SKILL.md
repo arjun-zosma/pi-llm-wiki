@@ -48,7 +48,7 @@ WIKI_ROOT/
 2. **META IS AUTO-GENERATED.** Never edit `meta/`. The extension rebuilds it automatically.
 3. **YOU OWN THE WIKI.** Create, update, and cross-reference everything in `wiki/`.
 4. **ONE FILE PER THING.** Each entity, concept, source gets its own `.md` file.
-5. **CROSS-REFERENCE EVERYTHING.** Every page needs at least 2 `[[wikilinks]]`.
+5. **CROSS-REFERENCE EVERYTHING.** Every page needs at least 2 links. Prefer standard Markdown: `[label](/folder/page.md)`. Legacy wikilinks `[[folder/page]]` remain readable.
 6. **CITE SOURCES.** Every claim links back to its raw source packet.
 7. **FLAG CONTRADICTIONS.** When sources disagree, document both sides.
 
@@ -149,7 +149,7 @@ After completing any meaningful task, call `wiki_retro` to save key insights:
 **Do not wait for the user to ask.** Save insights proactively — one atomic insight per call.
 
 ```
-wiki_retro(slug="kebab-case-slug", title="Brief descriptive title", body="Insight in your own words with [[wikilinks]]")
+wiki_retro(slug="kebab-case-slug", title="Brief descriptive title", body="Insight in your own words with [links](/folder/page.md)")
 ```
 
 ### Deeper Searches
@@ -214,7 +214,7 @@ Use these directly — they handle scaffolding, bookkeeping, recall, and capture
 3. **Read**: `read raw/sources/SRC-*/extracted.md`
 4. **Write**: Update skeleton source page with summary, entities, concepts
 5. **Ensure**: `wiki_ensure_page(type="entity", title="...")` for each entity
-6. **Cross-ref**: Add `[[wikilinks]]` between related pages
+6. **Cross-ref**: Add `[links](/folder/page.md)` between related pages
 7. **Done**: Extension auto-rebuilds metadata
 
 ### Query → Answer → File
@@ -222,7 +222,7 @@ Use these directly — they handle scaffolding, bookkeeping, recall, and capture
 1. **Layered recall**: Extension searches personal + project vaults, injects matching pages with vault labels
 2. For better results: call `wiki_recall` explicitly with task-specific terms
 3. Read those pages
-4. Synthesize answer with `[[wikilink]]` citations
+4. Synthesize answer with `[link](/folder/page.md)` citations
 5. If novel: create analysis page via `wiki_ensure_page(type="analysis")`
 6. Extension auto-updates metadata
 
@@ -248,7 +248,8 @@ Use these directly — they handle scaffolding, bookkeeping, recall, and capture
 ### Naming
 
 - `kebab-case.md` for all files
-- Folder-qualified wikilinks: `[[concepts/retrieval-augmented-generation]]`
+- Standard Markdown links: `[label](/concepts/retrieval-augmented-generation.md)`
+- Legacy wikilinks still readable: `[[concepts/retrieval-augmented-generation]]`
 
 ### Frontmatter
 
@@ -297,7 +298,8 @@ Open `wiki/` as an Obsidian vault. The extension generates:
 
 - `meta/index.md` — browsable catalog
 - `meta/backlinks.json` — for graph plugins
-- `[[wikilinks]]` — native Obsidian links
+- Standard Markdown links — preferred for new pages
+- Legacy wikilinks — still readable
 
 Recommended plugins: Dataview, Graph View, Backlinks
 

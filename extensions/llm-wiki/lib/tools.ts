@@ -5,6 +5,11 @@ import { Type } from "typebox";
 import { launchEmbedPages, reindexEmbeddings, resolveEmbedder } from "./embeddings.js";
 import { scheduleReindex } from "./indexing.js";
 import { runIngestSynthesis } from "./ingest-worker.js";
+import {
+  createKnowledgeDocument,
+  serializeKnowledgeDocument,
+  writeKnowledgeDocumentFile,
+} from "./knowledge-document.js";
 import { type Registry, appendEvent, rebuildMetadata, rebuildMetadataLight } from "./metadata.js";
 import type { Runtime } from "./runtime.js";
 import { captureFile, captureText, captureUrl } from "./source-packet.js";
@@ -560,9 +565,19 @@ export function registerWikiEnsurePage(pi: ExtensionAPI, runtime?: Runtime): voi
       }
 
       const today = fmtDate();
-      const template = buildPageTemplate(type, params.title, today, params.content);
+      const body = params.content ?? buildPageBody(type, params.title);
+      const doc = createKnowledgeDocument(
+        `${folder}/${slug}.md`,
+        {
+          type,
+          title: params.title,
+          created: today,
+          updated: today,
+        },
+        body,
+      );
       mkdirSync(join(paths.wiki, folder), { recursive: true });
-      writeFileSync(pagePath, template, "utf-8");
+      writeKnowledgeDocumentFile(pagePath, doc);
 
       appendEvent(paths, {
         kind: "ensure_page",
@@ -588,151 +603,135 @@ export function registerWikiEnsurePage(pi: ExtensionAPI, runtime?: Runtime): voi
   });
 }
 
-function buildPageTemplate(
-  type: string,
-  title: string,
-  date: string,
-  customContent?: string,
-): string {
-  if (customContent) return customContent;
-
-  const base = `---\ntype: ${type}\ncreated: ${date}\nupdated: ${date}\nsources: []\n---\n\n# ${title}\n\n[Description to be filled]\n\n## Links\n\n- [[related-page]]\n`;
-
+function buildPageBody(type: string, title: string): string {
   if (type === "entity") {
-    return base
-      .replace("[Description to be filled]", "One-line description.\n\n## Overview\n\n[Key facts]")
-      .replace("type: entity", "type: entity\ncategory: organization");
+    return `# ${title}
+
+One-line description.
+
+## Overview
+
+[Key facts]
+
+## Links
+
+- [related-page](/concepts/related-page.md)`;
   }
   if (type === "concept") {
-    return base
-      .replace(
-        "[Description to be filled]",
-        "One-line definition.\n\n## Definition\n\n[Clear explanation]",
-      )
-      .replace("type: concept", "type: concept\ndomain: ai");
+    return `# ${title}
+
+One-line definition.
+
+## Definition
+
+[Clear explanation]
+
+## Links
+
+- [related-page](/concepts/related-page.md)`;
   }
   if (type === "synthesis") {
-    return base
-      .replace(
-        "[Description to be filled]",
-        "Cross-cutting analysis.\n\n## Question\n\n[What drove this?]",
-      )
-      .replace("sources: []", "sources_count: 0");
+    return `# ${title}
+
+Cross-cutting analysis.
+
+## Question
+
+[What drove this?]
+
+## Links
+
+- [related-page](/concepts/related-page.md)`;
   }
   if (type === "analysis") {
-    return base.replace(
-      "[Description to be filled]",
-      "Durable answer from a query.\n\n## Question\n\n[Original question]",
-    );
+    return `# ${title}
+
+Durable answer from a query.
+
+## Question
+
+[Original question]
+
+## Links
+
+- [related-page](/concepts/related-page.md)`;
   }
   if (type === "skill") {
-    return [
-      "---",
-      "type: skill",
-      `created: ${date}`,
-      `updated: ${date}`,
-      "status: draft",
-      "trajectories: []",
-      "tags: []",
-      "---",
-      "",
-      `# ${title}`,
-      "",
-      "_One-line summary of the reusable pattern this skill captures._",
-      "",
-      "## When to Use",
-      "",
-      "[Trigger conditions — when this pattern applies]",
-      "",
-      "## Procedure",
-      "",
-      "1. [Step 1]",
-      "2. [Step 2]",
-      "",
-      "## Pitfalls",
-      "",
-      "- [Known failure mode or caveat]",
-      "",
-      "## Distilled From",
-      "",
-      "_Trajectories this skill was generalized from._",
-      "",
-      "- [[trajectories/TRJ-...]]",
-      "",
-    ].join("\n");
+    return `# ${title}
+
+_One-line summary of the reusable pattern this skill captures._
+
+## When to Use
+
+[Trigger conditions — when this pattern applies]
+
+## Procedure
+
+1. [Step 1]
+2. [Step 2]
+
+## Pitfalls
+
+- [Known failure mode or caveat]
+
+## Distilled From
+
+_Trajectories this skill was generalized from._
+
+- [trajectories/TRJ-...](/trajectories/TRJ-....md)`;
   }
   if (type === "case") {
-    return [
-      "---",
-      "type: case",
-      `created: ${date}`,
-      `updated: ${date}`,
-      "status: draft",
-      "outcome: success",
-      "trajectory_id: ",
-      "tags: []",
-      "---",
-      "",
-      `# ${title}`,
-      "",
-      "_One-line summary of the specific task this case records._",
-      "",
-      "## Task",
-      "",
-      "[What was requested]",
-      "",
-      "## Approach",
-      "",
-      "[How the agent solved it — key steps and decisions]",
-      "",
-      "## Outcome",
-      "",
-      "[Result, and anything worth reusing or avoiding next time]",
-      "",
-      "## Trajectory",
-      "",
-      "- [[trajectories/TRJ-...]] — captured tool-call run",
-      "",
-    ].join("\n");
+    return `# ${title}
+
+_One-line summary of the specific task this case records._
+
+## Task
+
+[What was requested]
+
+## Approach
+
+[How the agent solved it — key steps and decisions]
+
+## Outcome
+
+[Result, and anything worth reusing or avoiding next time]
+
+## Trajectory
+
+- [trajectories/TRJ-...](/trajectories/TRJ-....md) — captured tool-call run`;
   }
   if (type === "requirement") {
-    return [
-      "---",
-      "type: requirement",
-      `created: ${date}`,
-      `updated: ${date}`,
-      "status: draft",
-      "priority: p2",
-      "source_id: ",
-      "depends_on: []",
-      "---",
-      "",
-      `# ${title}`,
-      "",
-      "## Description",
-      "",
-      "[Clear description of what this requirement entails]",
-      "",
-      "## Acceptance Criteria",
-      "",
-      "- [ ] [Criterion 1]",
-      "- [ ] [Criterion 2]",
-      "",
-      "## Dependencies",
-      "",
-      "_Pages this requirement depends on._",
-      "",
-      "## Implementation Notes",
-      "",
-      "[Optional notes]",
-      "",
-      "## Sources",
-      "",
-      "- [[sources/SRC-...]] — original concept capture",
-      "",
-    ].join("\n");
+    return `# ${title}
+
+## Description
+
+[Clear description of what this requirement entails]
+
+## Acceptance Criteria
+
+- [ ] [Criterion 1]
+- [ ] [Criterion 2]
+
+## Dependencies
+
+_Pages this requirement depends on._
+
+## Implementation Notes
+
+[Optional notes]
+
+## Sources
+
+- [sources/SRC-...](/sources/SRC-....md) — original concept capture`;
   }
-  return base;
+  return `# ${title}
+
+[Description to be filled]
+
+## Links
+
+- [related-page](/concepts/related-page.md)`;
 }
 
 // ─── 5. wiki_search ─────────────────────────────────────
@@ -892,11 +891,21 @@ function runWikiLint(paths: VaultPaths, autoFix: boolean): string {
         try {
           // Atomic create-if-absent: the `wx` flag fails with EEXIST instead of
           // overwriting, avoiding the existsSync→write TOCTOU race (CodeQL).
-          writeFileSync(
-            pagePath,
-            `---\ntype: concept\ncreated: ${fmtDate()}\nupdated: ${fmtDate()}\nsources: []\nstatus: stub\n---\n\n# ${name.replace(/-/g, " ")}\n\n_Stub auto-created by lint. Expand with content from: ${gap.mentionedBy.map((r) => `[[${r}]]`).join(", ")}_\n`,
-            { encoding: "utf-8", flag: "wx" },
+          const doc = createKnowledgeDocument(
+            `concepts/${name}.md`,
+            {
+              type: "concept",
+              title: name.replace(/-/g, " "),
+              created: fmtDate(),
+              updated: fmtDate(),
+              status: "stub",
+            },
+            `_Stub auto-created by lint. Expand with content from: ${gap.mentionedBy.map((r) => `[${r}](/${r}.md)`).join(", ")}_`,
           );
+          writeFileSync(pagePath, serializeKnowledgeDocument(doc), {
+            encoding: "utf-8",
+            flag: "wx",
+          });
           fixesApplied++;
         } catch (err) {
           // Page already exists — nothing to fix. Re-throw anything else.
