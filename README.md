@@ -23,6 +23,18 @@ Follows Andrej Karpathy's [LLM Wiki pattern](https://gist.github.com/karpathy/44
 
 Turn raw sources (URLs, PDFs, markdown, JSON, XML) into a durable, interlinked, LLM-maintained wiki that compounds over time.
 
+### Native Open Knowledge Format (OKF) v0.2 support
+
+Build a knowledge base you can carry forward — not another closed, app-specific export:
+
+- **Create portable OKF v0.2 documents** with canonical frontmatter, standard Markdown links, and stable source citations.
+- **Read both legacy and OKF pages** so existing vaults keep working without an automatic migration or rewrite.
+- **Generate deterministic indexes and logs** from authoritative pages, keeping navigation and metadata reproducible.
+- **Use the same knowledge model from Pi or MCP** with Claude Code, Cursor, Windsurf, and other MCP clients.
+- **Stay Obsidian-compatible** while keeping your knowledge ready for tools that support Open Knowledge Format.
+
+Start with a new OKF vault, or point pi-llm-wiki at an existing vault and adopt the format on your terms. See the [OKF Foundation specification](docs/superpowers/specs/2026-08-02-okf-foundation-design.md) for implementation details.
+
 ---
 
 ## Quick Start
@@ -71,7 +83,8 @@ The result is a wiki that **compounds** as you capture sources, ask questions, a
 | 📝 **Auto-bootstrap** | Extension suggests creating a wiki when none exists in the current directory |
 | 💾 **Lightweight capture** | `wiki_retro` — save atomic insights as a single markdown file; full 4-layer pipeline also available via `wiki_capture_source` |
 | 🧭 **Agent working-memory** _(opt-in)_ | `wiki_capture_trajectory` records *how* a task was solved (tool-call trajectory) → distill into reusable `skill`/`case` pages → `wiki_recall_skill` surfaces them next time. Off by default; enable with `/wiki-trajectories on` |
-| 🌐 **MCP Server** | Use with Claude Code, Cursor, Windsurf via stdio MCP transport |
+| 🌐 **OKF v0.2 native** | Portable Open Knowledge Format documents, dual-read legacy compatibility, deterministic projections |
+| 🌐 **MCP Server** | Use the same OKF-aware wiki from Claude Code, Cursor, Windsurf via stdio MCP transport |
 | 📝 **Obsidian-friendly** | Folder-qualified wikilinks, stable source-ID citations, compatible vault |
 | 🛡️ **Guardrails** | Blocks direct edits to raw sources and generated metadata |
 | 🔧 **Configurable PDF extraction** | MarkItDown timeout via `WIKI_MARKITDOWN_TIMEOUT_MS` env var |
