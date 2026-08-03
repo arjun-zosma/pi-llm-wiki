@@ -1,5 +1,5 @@
 import { existsSync, lstatSync, readFileSync, readdirSync } from "node:fs";
-import { join, relative } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
   type KnowledgeDiagnostic,
   type KnowledgeDocument,
@@ -48,20 +48,28 @@ function isReservedName(filename: string): boolean {
   return name === "index.md" || name === "log.md";
 }
 
-function readConfigJson(
-  dotWiki: string,
-): { ok: true; config: Record<string, unknown> } | { ok: false; error: string } {
-  const path = join(dotWiki, "config.json");
+export type VaultConfigRead =
+  | { ok: true; config: Record<string, unknown> }
+  | { ok: false; diagnostic: KnowledgeDiagnostic };
+
+export function readVaultConfig(paths: VaultPaths): VaultConfigRead {
+  const path = join(paths.dotWiki, "config.json");
   try {
-    const content = readFileSync(path, "utf8");
-    const config = JSON.parse(content);
-    if (typeof config !== "object" || config === null || Array.isArray(config)) {
-      return { ok: false, error: "config.json is not an object" };
+    const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("config.json must contain an object");
     }
-    return { ok: true, config };
-  } catch (e: unknown) {
-    const err = e as Error;
-    return { ok: false, error: err.message };
+    return { ok: true, config: parsed as Record<string, unknown> };
+  } catch (error: unknown) {
+    return {
+      ok: false,
+      diagnostic: diag(
+        "error",
+        "config_invalid_knowledge_format",
+        "config.json",
+        `Cannot read valid wiki config: ${(error as Error).message}`,
+      ),
+    };
   }
 }
 
@@ -69,14 +77,12 @@ export function inspectVaultFormat(paths: VaultPaths): VaultFormatState {
   const diagnostics: KnowledgeDiagnostic[] = [];
   let blocking = false;
 
-  // Read config
-  const configResult = readConfigJson(paths.dotWiki);
+  const configResult = readVaultConfig(paths);
   if (!configResult.ok) {
-    // If config.json is missing or malformed, treat as legacy
     return {
       knowledgeFormat: "legacy",
-      diagnostics,
-      blocking: false,
+      diagnostics: [configResult.diagnostic],
+      blocking: true,
     };
   }
 
@@ -108,25 +114,37 @@ export function inspectVaultFormat(paths: VaultPaths): VaultFormatState {
   // Missing root index is repairable; version mismatch blocks until explicitly handled
   if (format === "okf-0.2") {
     const rootIndexPath = join(paths.wiki, "index.md");
+    let rootContent: string | undefined;
     try {
-      const content = readFileSync(rootIndexPath, "utf8");
-      const frontmatter = parseMarkdownFrontmatter(content, "index.md");
-      if (frontmatter.ok && frontmatter.mapping.okf_version !== undefined) {
-        if (frontmatter.mapping.okf_version !== "0.2") {
-          diagnostics.push(
-            diag(
-              "error",
-              "okf_version_mismatch",
-              "wiki/index.md",
-              `Expected okf_version "0.2", got "${frontmatter.mapping.okf_version}"`,
-            ),
-          );
-          blocking = true;
-        }
+      rootContent = readFileSync(rootIndexPath, "utf8");
+    } catch (error: unknown) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        diagnostics.push(
+          diag(
+            "error",
+            "okf_version_mismatch",
+            "wiki/index.md",
+            `Cannot read OKF root index: ${(error as Error).message}`,
+          ),
+        );
+        blocking = true;
       }
-      // Missing root index is repairable
-    } catch {
-      // Missing root index is repairable
+    }
+    if (rootContent !== undefined) {
+      const frontmatter = parseMarkdownFrontmatter(rootContent, "index.md");
+      if (!frontmatter.ok || frontmatter.mapping.okf_version !== "0.2") {
+        diagnostics.push(
+          diag(
+            "error",
+            "okf_version_mismatch",
+            "wiki/index.md",
+            frontmatter.ok
+              ? 'OKF root index must declare okf_version "0.2"'
+              : `Malformed OKF root index: ${frontmatter.diagnostics[0].message}`,
+          ),
+        );
+        blocking = true;
+      }
     }
   }
 
@@ -238,10 +256,10 @@ export function inspectWritableVault(
 /** Check if path is a generated OKF reserved file (mode-aware). */
 export function isGeneratedOkfPath(path: string, paths: VaultPaths): boolean {
   const state = inspectVaultFormat(paths);
-  if (state.knowledgeFormat !== "okf-0.2") return false;
-  const rel = relative(paths.wiki, path);
-  if (!rel) return false;
-  const parts = rel.split("/");
+  if (state.blocking || state.knowledgeFormat !== "okf-0.2") return false;
+  const rel = relative(paths.wiki, resolve(path));
+  if (!rel || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return false;
+  const parts = rel.split(/[\\/]/);
   const name = parts.at(-1)?.toLowerCase();
   return name === "index.md" || (parts.length === 1 && name === "log.md");
 }

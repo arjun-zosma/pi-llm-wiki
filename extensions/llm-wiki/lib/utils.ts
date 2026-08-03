@@ -134,6 +134,10 @@ export function isPersonalVault(paths: VaultPaths): boolean {
  * 4. Fallback: ~/.llm-wiki/ (create personal wiki)
  */
 export function resolveVaultRoot(cwd: string): string {
+  // An explicit WIKI_HOME is a testable/user-selected override and must win
+  // over an unrelated personal vault found while walking parent directories.
+  if (process.env.WIKI_HOME) return process.env.WIKI_HOME;
+
   // Check for any vault format at cwd
   if (detectVaultFormat(cwd) !== "none") return cwd;
 

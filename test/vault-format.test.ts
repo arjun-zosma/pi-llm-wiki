@@ -25,10 +25,51 @@ describe("vault format", () => {
     expect(inspectVaultFormat(vault({ name: "Old" })).knowledgeFormat).toBe("legacy");
   });
 
+  it.each([
+    ["missing", undefined],
+    ["malformed", "{not-json"],
+    ["array", "[]"],
+  ])("fails closed for %s config", (_label, configText) => {
+    const paths = vault({ knowledge_format: "legacy" });
+    const configPath = join(paths.dotWiki, "config.json");
+    if (configText === undefined) rmSync(configPath);
+    else writeFileSync(configPath, configText);
+    const state = inspectVaultFormat(paths);
+    expect(state.blocking).toBe(true);
+    expect(state.diagnostics.map((diagnostic) => diagnostic.code)).toContain(
+      "config_invalid_knowledge_format",
+    );
+  });
+
   it.each(["okf-0.3", 2, null])("fails closed for explicit invalid mode %j", (value) => {
     const state = inspectVaultFormat(vault({ knowledge_format: value }));
     expect(state.blocking).toBe(true);
     expect(state.diagnostics[0].code).toBe("config_invalid_knowledge_format");
+  });
+
+  it.each([
+    ["frontmatter-less", "# user index\n"],
+    ["malformed", "---\nokf_version: [\n---\n"],
+    ["versionless", "---\ntitle: Root\n---\n"],
+  ])("blocks an existing %s OKF root index", (_label, content) => {
+    const paths = vault({ knowledge_format: "okf-0.2" });
+    writeFileSync(join(paths.wiki, "index.md"), content);
+    const state = inspectVaultFormat(paths);
+    expect(state.blocking).toBe(true);
+    expect(state.diagnostics.map((diagnostic) => diagnostic.code)).toContain(
+      "okf_version_mismatch",
+    );
+  });
+
+  it("turns an unreadable OKF root into a blocking diagnostic", () => {
+    const paths = vault({ knowledge_format: "okf-0.2" });
+    mkdirSync(join(paths.wiki, "index.md"));
+    expect(() => inspectVaultFormat(paths)).not.toThrow();
+    const state = inspectVaultFormat(paths);
+    expect(state.blocking).toBe(true);
+    expect(state.diagnostics.map((diagnostic) => diagnostic.code)).toContain(
+      "okf_version_mismatch",
+    );
   });
 
   it("repairs a missing root index in OKF mode but blocks an unsupported version", () => {

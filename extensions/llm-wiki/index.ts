@@ -1,7 +1,8 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { installGuardrails } from "./lib/guardrails.js";
+import { bootstrapVault } from "./lib/bootstrap.js";
 import { buildAgentStartInjection, normalizeSystemPrompt } from "./lib/inject.js";
 import { registerWikiModelCommand } from "./lib/model-command.js";
 import {
@@ -39,14 +40,8 @@ import {
   registerWikiDistillSkills,
   registerWikiRecallSkill,
 } from "./lib/trajectory.js";
-import {
-  ensureVaultStructure,
-  fmtDate,
-  getVaultPaths,
-  migrateDoubledPersonalVault,
-  resolveVaultPaths,
-  writeJson,
-} from "./lib/utils.js";
+import { migrateDoubledPersonalVault, resolveVaultPaths } from "./lib/utils.js";
+import { inspectWritableVault } from "./lib/vault-format.js";
 import { applySessionStartStatus } from "./lib/visible-status.js";
 
 /**
@@ -144,39 +139,33 @@ export default function (pi: ExtensionAPI) {
 
     const paths = resolveVaultPaths(process.cwd());
     if (!existsSync(join(paths.dotWiki, "config.json"))) {
-      // Silently create the wiki vault — no UI prompts
-      // Topic/mode will be inferred from user's first prompt via before_agent_start
-      const root = paths.root;
-      const vaultPaths = getVaultPaths(root);
-      ensureVaultStructure(vaultPaths);
-
-      writeJson(join(vaultPaths.dotWiki, "config.json"), {
-        name: "pending",
-        mode: "personal",
-        topic: "pending",
-        created: fmtDate(),
-        version: "1.0",
-      });
-
-      const schema = [
-        "# LLM Wiki Schema",
-        "",
-        "## Ownership Rules",
-        "",
-        "| Path | Owner | Rule |",
-        "|------|-------|------|",
-        "| raw/** | extension | immutable after capture |",
-        "| wiki/** | model + user | editable knowledge pages |",
-        "| meta/* | extension | auto-generated |",
-        "| . | human + explicit request | operating rules |",
-      ].join("\n");
-      writeFileSync(join(vaultPaths.dotWiki, "WIKI_SCHEMA.md"), schema, "utf-8");
+      // Silently create the wiki vault — no UI prompts. Topic/mode will be
+      // inferred from the user's first prompt via before_agent_start.
+      const result = bootstrapVault(paths, { topic: "pending", mode: "personal" });
+      if (!result.ok || !result.projection.ok) {
+        ctx.ui.setStatus(
+          "llm-wiki",
+          `🧠 Wiki setup blocked: ${
+            result.ok ? result.projection.diagnostics[0].message : result.diagnostics[0].message
+          }`,
+        );
+        return;
+      }
 
       needsTopicInference = true;
       // INTENTIONALLY NOT gated by `noticesEnabled` (issues #77, #84): one-shot
       // first-run setup signal. The user needs to know the wiki was just
       // auto-created, regardless of quiet mode.
       ctx.ui.setStatus("llm-wiki", "🧠 Wiki created (inferring topic from first prompt…)");
+      return;
+    }
+
+    const writable = inspectWritableVault(paths);
+    if (!writable.ok) {
+      ctx.ui.setStatus(
+        "llm-wiki",
+        `🧠 Wiki setup blocked: ${writable.diagnostics[0].message}`,
+      );
       return;
     }
 

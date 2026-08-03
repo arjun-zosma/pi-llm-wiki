@@ -1,12 +1,18 @@
 import { join } from "node:path";
+import { rmSync, writeFileSync } from "node:fs";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import {
   extractMutationPaths,
   hasWikiMutation,
   installGuardrails,
+  mutationBlockReason,
 } from "../extensions/llm-wiki/lib/guardrails.js";
-import { resolveVaultPaths } from "../extensions/llm-wiki/lib/utils.js";
+import {
+  ensureVaultStructure,
+  getVaultPaths,
+  resolveVaultPaths,
+} from "../extensions/llm-wiki/lib/utils.js";
 
 type ToolCallHandler = (event: { toolName: string; input: unknown }) => Promise<unknown>;
 
@@ -26,6 +32,37 @@ function captureToolCallHandler(): ToolCallHandler {
 const vaultPaths = resolveVaultPaths(process.cwd());
 
 describe("edit guardrails", () => {
+  it("blocks contained wiki writes when config is malformed", () => {
+    const root = join(import.meta.dirname, "..", "tmp", `guardrail-${Date.now()}`);
+    const paths = getVaultPaths(root);
+    ensureVaultStructure(paths);
+    writeFileSync(join(paths.dotWiki, "config.json"), "{broken");
+    try {
+      expect(mutationBlockReason(join(paths.wiki, "concepts", "x.md"), paths)).toContain(
+        "configuration is invalid",
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("allows an outside index file and blocks only contained OKF indexes", () => {
+    const root = join(import.meta.dirname, "..", "tmp", `guardrail-${Date.now()}`);
+    const paths = getVaultPaths(root);
+    ensureVaultStructure(paths);
+    writeFileSync(
+      join(paths.dotWiki, "config.json"),
+      JSON.stringify({ knowledge_format: "okf-0.2" }),
+    );
+    try {
+      expect(mutationBlockReason(join(root, "outside", "index.md"), paths)).toBeUndefined();
+      expect(mutationBlockReason(join(paths.wiki, "nested", "INDEX.md"), paths)).toContain(
+        "Generated OKF",
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
   it("extracts every file target from an Edit patch", () => {
     const paths = extractMutationPaths({
       patch: [

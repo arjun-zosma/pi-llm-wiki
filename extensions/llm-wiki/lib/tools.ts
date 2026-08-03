@@ -3,6 +3,7 @@ import { join, relative } from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "typebox";
 import { launchEmbedPages, reindexEmbeddings, resolveEmbedder } from "./embeddings.js";
+import { bootstrapVault } from "./bootstrap.js";
 import { scheduleReindex } from "./indexing.js";
 import { runIngestSynthesis } from "./ingest-worker.js";
 import {
@@ -115,105 +116,32 @@ export function registerWikiBootstrap(pi: ExtensionAPI): void {
       const root = params.root ?? ctx.cwd ?? process.cwd();
       const mode = params.mode || "personal";
       const paths = getVaultPaths(root);
-      const configPath = join(paths.dotWiki, "config.json");
-
-      ensureVaultStructure(paths);
-
-      // Read existing config if present; preserve knowledge_format (including absence for old vaults)
-      const config: Record<string, unknown> = {
-        name: params.topic,
-        mode,
-        topic: params.topic,
-        created: fmtDate(),
-        version: "1.0",
-      };
-      if (existsSync(configPath)) {
-        try {
-          const existing = readJson<Record<string, unknown>>(configPath, {});
-          // Preserve existing knowledge_format exactly (including absence)
-          if (existing.knowledge_format !== undefined) {
-            // Validate explicit mode
-            if (existing.knowledge_format !== "legacy" && existing.knowledge_format !== "okf-0.2") {
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: `Invalid knowledge_format in existing config: ${JSON.stringify(existing.knowledge_format)}`,
-                  },
-                ],
-                details: { error: "config_invalid_knowledge_format" } as Record<string, unknown>,
-                isError: true,
-              };
-            }
-            config.knowledge_format = existing.knowledge_format;
-          }
-          // Preserve existing created date
-          if (existing.created) config.created = existing.created;
-        } catch {
-          // Malformed JSON — treat as new vault
-        }
-      } else {
-        // New vault — persist OKF mode
-        config.knowledge_format = "okf-0.2";
+      const result = bootstrapVault(paths, { topic: params.topic, mode });
+      if (!result.ok) {
+        return {
+          content: [{ type: "text", text: `Wiki vault error: ${result.diagnostics[0].message}` }],
+          details: {
+            error: result.diagnostics[0].code,
+            diagnostics: result.diagnostics,
+          } as Record<string, unknown>,
+          isError: true,
+        };
       }
-      writeJson(configPath, config);
-
-      const schema = [
-        "# LLM Wiki Schema",
-        "",
-        "## Ownership Rules",
-        "",
-        "| Path | Owner | Rule |",
-        "|------|-------|------|",
-        "| raw/** | extension | immutable after capture |",
-        "| wiki/** | model + user | editable knowledge pages |",
-        "| meta/* | extension | auto-generated |",
-        "| . | human + explicit request | operating rules |",
-        "",
-        "## Source Packet Format",
-        "",
-        "```",
-        "raw/sources/SRC-YYYY-MM-DD-NNN/",
-        "  manifest.json",
-        "  original/",
-        "  extracted.md",
-        "  attachments/",
-        "```",
-        "",
-        "## Page Types",
-        "",
-        "- **source** — what this specific source says",
-        "- **entity** — people, orgs, tools, products",
-        "- **concept** — ideas, patterns, frameworks",
-        "- **synthesis** — cross-source theses and tensions",
-        "- **analysis** — durable filed answers from queries",
-        "- **requirement** — atomic requirements with status, priority, and traceability",
-        "",
-        "## Linking Style",
-        "",
-        "- New internal links: [label](/folder/page.md)",
-        "- Legacy readable links: [[folder/page]]",
-        "- Source citation: [source](/sources/SRC-YYYY-MM-DD-NNN.md)",
-        "",
-      ].join("\n");
-      writeFileSync(join(paths.dotWiki, "WIKI_SCHEMA.md"), schema, "utf-8");
-
-      // Append event BEFORE rebuild so log contains bootstrap immediately
-      appendEvent(paths, { kind: "bootstrap", topic: params.topic, mode });
-      const projection = rebuildMetadata(paths);
-      if (!projection.ok) {
+      if (!result.projection.ok) {
         return {
           content: [
             {
               type: "text",
-              text: `✅ Wiki bootstrapped but projection rebuild had issues: ${projection.diagnostics.map((d) => `${d.code}: ${d.message}`).join("; ")}`,
+              text: `✅ Wiki bootstrapped but projection rebuild had issues: ${result.projection.diagnostics
+                .map((diagnostic) => `${diagnostic.code}: ${diagnostic.message}`)
+                .join("; ")}`,
             },
           ],
           details: {
             root,
             mode,
             topic: params.topic,
-            diagnostics: projection.diagnostics,
+            diagnostics: result.projection.diagnostics,
           } as Record<string, unknown>,
         };
       }
