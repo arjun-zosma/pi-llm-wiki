@@ -12,7 +12,6 @@ import { appendEvent } from "../extensions/llm-wiki/lib/metadata.js";
 import { registerWikiObserve, saveObservation } from "../extensions/llm-wiki/lib/observation.js";
 import { registerWikiRetro, saveInsight } from "../extensions/llm-wiki/lib/retro.js";
 import { captureText } from "../extensions/llm-wiki/lib/source-packet.js";
-import { captureTrajectory, registerWikiCaptureTrajectory } from "../extensions/llm-wiki/lib/trajectory.js";
 import {
   registerWikiCaptureSource,
   registerWikiEnsurePage,
@@ -22,6 +21,10 @@ import {
   registerWikiRebuildMeta,
   registerWikiReindexEmbeddings,
 } from "../extensions/llm-wiki/lib/tools.js";
+import {
+  captureTrajectory,
+  registerWikiCaptureTrajectory,
+} from "../extensions/llm-wiki/lib/trajectory.js";
 import { ensureVaultStructure, getVaultPaths } from "../extensions/llm-wiki/lib/utils.js";
 import { VaultWriteError } from "../extensions/llm-wiki/lib/vault-format.js";
 
@@ -47,11 +50,21 @@ function tree(path: string): string[] {
   return readdirSync(path, { recursive: true }).map(String).sort();
 }
 
+type TestTool = {
+  execute: (...args: unknown[]) => Promise<{
+    isError?: boolean;
+    content: Array<{ text: string }>;
+    details: Record<string, unknown>;
+  }>;
+};
 describe("authoritative mutation guards", () => {
   it("blocks every shared authoritative writer before changing the vault", async () => {
     const operations: Array<[string, (paths: ReturnType<typeof invalidVault>) => unknown]> = [
       ["capture", (paths) => captureText(paths, "body", "title")],
-      ["observe", (paths) => saveObservation(paths, { title: "x", content: "y", relevance: "low" })],
+      [
+        "observe",
+        (paths) => saveObservation(paths, { title: "x", content: "y", relevance: "low" }),
+      ],
       ["retro", (paths) => saveInsight(paths, "safe-slug", "title", "body")],
       ["trajectory", (paths) => captureTrajectory(paths, { steps: [{ role: "user", text: "x" }] })],
       ["event", (paths) => appendEvent(paths, { kind: "manual" })],
@@ -90,11 +103,7 @@ describe("authoritative mutation guards", () => {
   });
 
   it("blocks every mutating Pi tool adapter before dispatch or write", async () => {
-    const cases: Array<[
-      string,
-      (pi: ExtensionAPI) => void,
-      Record<string, unknown>,
-    ]> = [
+    const cases: Array<[string, (pi: ExtensionAPI) => void, Record<string, unknown>]> = [
       ["capture", (pi) => registerWikiCaptureSource(pi), { text: "body", title: "title" }],
       ["ingest", (pi) => registerWikiIngest(pi), { background: false }],
       ["ensure", (pi) => registerWikiEnsurePage(pi), { type: "concept", title: "Title" }],
@@ -114,21 +123,19 @@ describe("authoritative mutation guards", () => {
     for (const [name, register, params] of cases) {
       const paths = invalidVault();
       process.env.WIKI_HOME = paths.root;
-      let tool: { execute: (...args: any[]) => Promise<any> } | undefined;
+      let tool: TestTool | undefined;
       register({
         registerTool: (definition: unknown) => {
-          tool = definition as { execute: (...args: any[]) => Promise<any> };
+          tool = definition as TestTool;
         },
       } as unknown as ExtensionAPI);
       if (!tool) throw new Error(`Tool not registered: ${name}`);
       const before = tree(paths.dotWiki);
-      const result = await tool.execute(
-        "test",
-        params,
-        undefined,
-        undefined,
-        { cwd: paths.root, hasUI: false, ui: { notify: () => {} } },
-      );
+      const result = await tool.execute("test", params, undefined, undefined, {
+        cwd: paths.root,
+        hasUI: false,
+        ui: { notify: () => {} },
+      });
       expect(result.isError, name).toBe(true);
       expect(tree(paths.dotWiki), name).toEqual(before);
     }

@@ -12,7 +12,7 @@ const control = vi.hoisted(() => {
 
 vi.mock("../extensions/llm-wiki/lib/subagent.js", () => ({
   runSubAgent: vi.fn(
-    async (args: { tools: Array<{ execute: (...args: any[]) => Promise<unknown> }> }) => {
+    async (args: { tools: Array<{ execute: (...args: unknown[]) => Promise<unknown> }> }) => {
       await control.gate;
       await args.tools[0].execute("commit", {
         summary: "Summary",
@@ -47,7 +47,10 @@ it("rechecks vault mode after synthesis and before background commit", async () 
     extracted: "content",
   });
 
-  writeFileSync(join(paths.dotWiki, "config.json"), JSON.stringify({ knowledge_format: "invalid" }));
+  writeFileSync(
+    join(paths.dotWiki, "config.json"),
+    JSON.stringify({ knowledge_format: "invalid" }),
+  );
   control.release();
   const result = await pending;
   expect(result).toBeUndefined();

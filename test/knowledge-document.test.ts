@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -6,7 +6,9 @@ import {
   createKnowledgeDocument,
   parseKnowledgeDocument,
   patchKnowledgeDocument,
+  readKnowledgeDocumentFile,
   serializeKnowledgeDocument,
+  writeKnowledgeDocumentFile,
 } from "../extensions/llm-wiki/lib/knowledge-document.js";
 
 function parsed(content: string, path = "concepts/test.md") {
@@ -69,6 +71,7 @@ describe("KnowledgeDocument", () => {
   it.each([
     ["frontmatter_parse_error", "---\ntype: concept\nx: [1,\n---\n"],
     ["frontmatter_duplicate_key", "---\ntype: concept\nx:\n  a: 1\n  a: 2\n---\n"],
+    ["frontmatter_duplicate_key", '---\ntype: concept\ntrue: one\n"true": two\n---\n'],
     ["frontmatter_missing", "---oops\ntype: concept\n---\n"],
     ["concept_missing_type", "---\ntype: 42\n---\n"],
     ["concept_missing_type", "---\ntype: []\n---\n"],
@@ -131,6 +134,18 @@ describe("KnowledgeDocument", () => {
     expect(parseKnowledgeDocument(deep, "concepts/a.md").diagnostics[0].code).toBe(
       "frontmatter_limit_depth",
     );
+  });
+
+  it("reads and writes canonical document files", () => {
+    const path = join(import.meta.dirname, "..", "tmp", "knowledge-document-file.md");
+    const doc = createKnowledgeDocument(path, { type: "concept", title: "File" }, "Body.");
+    try {
+      writeKnowledgeDocumentFile(path, doc);
+      const result = readKnowledgeDocumentFile(path, path);
+      expect(result.ok).toBe(true);
+    } finally {
+      rmSync(path, { force: true });
+    }
   });
 
   it.each([

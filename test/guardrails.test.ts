@@ -1,5 +1,5 @@
-import { join } from "node:path";
 import { rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import {

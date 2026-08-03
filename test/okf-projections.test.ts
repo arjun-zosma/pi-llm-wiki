@@ -430,7 +430,7 @@ describe("OKF rebuild integration", () => {
       const results: string[] = [];
       for (const entry of readdirSync(dir)) {
         const fullPath = join(dir, entry);
-        if (entry.startsWith("tmp-")) results.push(fullPath);
+        if (entry.includes(".tmp-")) results.push(fullPath);
         else if (statSync(fullPath).isDirectory()) results.push(...findTmp(fullPath));
       }
       return results;

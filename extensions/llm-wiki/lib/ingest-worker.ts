@@ -16,7 +16,7 @@ import {
 import { appendEvent, rebuildMetadataLight } from "./metadata.js";
 import { runSubAgent } from "./subagent.js";
 import { type VaultPaths, fmtDate, slugify } from "./utils.js";
-import { assertWritableVault, VaultWriteError } from "./vault-format.js";
+import { VaultWriteError, assertWritableVault } from "./vault-format.js";
 
 /**
  * Background ingest synthesis (issue #65, part of epic #63).

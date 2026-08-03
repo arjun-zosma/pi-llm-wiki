@@ -3,10 +3,17 @@ import { join } from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { registerWikiRetro, saveInsight } from "../extensions/llm-wiki/lib/retro.js";
-import { retroOperation } from "../mcp/operations.js";
 import { ensureVaultStructure, getVaultPaths } from "../extensions/llm-wiki/lib/utils.js";
+import { retroOperation } from "../mcp/operations.js";
 import { readFile } from "./helpers.js";
 
+type TestTool = {
+  execute: (...args: unknown[]) => Promise<{
+    isError?: boolean;
+    content: Array<{ text: string }>;
+    details: Record<string, unknown>;
+  }>;
+};
 describe("wiki retro", () => {
   let wikiDir: string;
   let tmpDir: string;
@@ -63,10 +70,10 @@ describe("wiki retro", () => {
 
   it("maps unsafe retro slugs to structured Pi and MCP errors", async () => {
     const paths = getVaultPaths(wikiDir);
-    let tool: { execute: (...args: any[]) => Promise<any> } | undefined;
+    let tool: TestTool | undefined;
     registerWikiRetro({
       registerTool: (definition: unknown) => {
-        tool = definition as { execute: (...args: any[]) => Promise<any> };
+        tool = definition as TestTool;
       },
     } as unknown as ExtensionAPI);
     if (!tool) throw new Error("wiki_retro was not registered");
@@ -84,7 +91,9 @@ describe("wiki retro", () => {
     const mcpResult = await retroOperation(paths, "../../escape", "Title", "Body");
     expect(mcpResult).toEqual({
       ok: false,
-      diagnostics: [{ code: "invalid_insight_slug", message: "Invalid insight slug: ../../escape" }],
+      diagnostics: [
+        { code: "invalid_insight_slug", message: "Invalid insight slug: ../../escape" },
+      ],
     });
     expect(existsSync(join(paths.root, "escape.md"))).toBe(false);
     expect(existsSync(join(paths.meta, "events.jsonl"))).toBe(false);

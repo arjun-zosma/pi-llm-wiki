@@ -24,15 +24,15 @@ function root() {
 }
 
 function extensionHarness() {
-  const handlers = new Map<string, Array<(...args: any[]) => unknown>>();
-  const tools = new Map<string, { execute: (...args: any[]) => Promise<any> }>();
+  const handlers = new Map<string, Array<(...args: unknown[]) => unknown>>();
+  const tools = new Map<string, { execute: (...args: unknown[]) => Promise<unknown> }>();
   const pi = {
-    on: (name: string, handler: (...args: any[]) => unknown) => {
+    on: (name: string, handler: (...args: unknown[]) => unknown) => {
       const current = handlers.get(name) ?? [];
       current.push(handler);
       handlers.set(name, current);
     },
-    registerTool: (tool: { name: string; execute: (...args: any[]) => Promise<any> }) => {
+    registerTool: (tool: { name: string; execute: (...args: unknown[]) => Promise<unknown> }) => {
       tools.set(tool.name, tool);
     },
     registerCommand: () => {},
@@ -52,12 +52,15 @@ describe("bootstrap", () => {
     const { handlers } = extensionHarness();
     const sessionStart = handlers.get("session_start")?.at(-1);
     expect(sessionStart).toBeDefined();
-    await sessionStart?.({}, {
-      cwd,
-      hasUI: true,
-      ui: { setStatus: () => {} },
-      model: { id: "test" },
-    });
+    await sessionStart?.(
+      {},
+      {
+        cwd,
+        hasUI: true,
+        ui: { setStatus: () => {} },
+        model: { id: "test" },
+      },
+    );
     const paths = getVaultPaths(cwd);
     expect(resolveVaultPaths(cwd).root).toBe(cwd);
     const config = JSON.parse(readFileSync(join(paths.dotWiki, "config.json"), "utf8"));
@@ -80,12 +83,15 @@ describe("bootstrap", () => {
     const { handlers } = extensionHarness();
     const statuses: string[] = [];
     const sessionStart = handlers.get("session_start")?.at(-1);
-    await sessionStart?.({}, {
-      cwd,
-      hasUI: true,
-      ui: { setStatus: (_key: string, value: string) => statuses.push(value) },
-      model: { id: "test" },
-    });
+    await sessionStart?.(
+      {},
+      {
+        cwd,
+        hasUI: true,
+        ui: { setStatus: (_key: string, value: string) => statuses.push(value) },
+        model: { id: "test" },
+      },
+    );
     expect(statuses.some((status) => status.includes("setup blocked"))).toBe(true);
     expect(existsSync(join(paths.meta, "events.jsonl"))).toBe(false);
   });

@@ -5,8 +5,8 @@ import { scheduleReindex } from "./indexing.js";
 import { rebuildMetadataLight } from "./metadata.js";
 import type { Runtime } from "./runtime.js";
 import { isProtectedPath, resolveVaultPaths } from "./utils.js";
-import { inspectVaultFormat, isGeneratedOkfPath } from "./vault-format.js";
 import type { VaultPaths } from "./utils.js";
+import { inspectVaultFormat, isGeneratedOkfPath } from "./vault-format.js";
 
 /**
  * Guardrails and auto-rebuild hooks for the LLM Wiki extension.

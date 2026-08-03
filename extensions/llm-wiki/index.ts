@@ -1,8 +1,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { installGuardrails } from "./lib/guardrails.js";
 import { bootstrapVault } from "./lib/bootstrap.js";
+import { installGuardrails } from "./lib/guardrails.js";
 import { buildAgentStartInjection, normalizeSystemPrompt } from "./lib/inject.js";
 import { registerWikiModelCommand } from "./lib/model-command.js";
 import {
@@ -162,10 +162,7 @@ export default function (pi: ExtensionAPI) {
 
     const writable = inspectWritableVault(paths);
     if (!writable.ok) {
-      ctx.ui.setStatus(
-        "llm-wiki",
-        `🧠 Wiki setup blocked: ${writable.diagnostics[0].message}`,
-      );
+      ctx.ui.setStatus("llm-wiki", `🧠 Wiki setup blocked: ${writable.diagnostics[0].message}`);
       return;
     }
 

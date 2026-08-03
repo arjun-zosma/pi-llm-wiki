@@ -3,7 +3,6 @@ import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Type } from "typebox";
 import { appendEvent, rebuildMetadataLight } from "./metadata.js";
-import { assertWritableVault, inspectWritableVault } from "./vault-format.js";
 import { searchWikiLayered } from "./recall.js";
 import {
   type VaultPaths,
@@ -13,6 +12,7 @@ import {
   resolveVaultPaths,
   writeJson,
 } from "./utils.js";
+import { assertWritableVault, inspectWritableVault } from "./vault-format.js";
 
 /**
  * Agent trajectory memory — the working-memory half of the wiki.
@@ -361,7 +361,9 @@ export function registerWikiCaptureTrajectory(pi: ExtensionAPI): void {
       const vaultCheck = inspectWritableVault(paths);
       if (!vaultCheck.ok) {
         return {
-          content: [{ type: "text", text: `Wiki vault error: ${vaultCheck.diagnostics[0].message}` }],
+          content: [
+            { type: "text", text: `Wiki vault error: ${vaultCheck.diagnostics[0].message}` },
+          ],
           details: {
             error: vaultCheck.diagnostics[0].code,
             diagnostics: vaultCheck.diagnostics,

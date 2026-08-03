@@ -116,9 +116,7 @@ describe("MCP parity with shared services", () => {
     const mcpResult = await captureSourceOperation(
       paths,
       { text: "Test content", title: "MCP Capture" },
-      {
-        exec: async () => ({ stdout: "", stderr: "", code: 0, killed: false }),
-      },
+      createExecApi(),
     );
     expect(mcpResult.ok).toBe(true);
     if (!mcpResult.ok) return;

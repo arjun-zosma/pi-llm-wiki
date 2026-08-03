@@ -1,25 +1,16 @@
-import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { join, relative } from "node:path";
+import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
+import extension from "../extensions/llm-wiki/index.js";
+import { commitSynthesis } from "../extensions/llm-wiki/lib/ingest-worker.js";
 import {
   createKnowledgeDocument,
   parseKnowledgeDocument,
   serializeKnowledgeDocument,
 } from "../extensions/llm-wiki/lib/knowledge-document.js";
-import { writeKnowledgeDocumentFile } from "../extensions/llm-wiki/lib/knowledge-document.js";
 import { rebuildMetadata } from "../extensions/llm-wiki/lib/metadata.js";
-import { appendEvent } from "../extensions/llm-wiki/lib/metadata.js";
-import { saveObservation } from "../extensions/llm-wiki/lib/observation.js";
-import { searchWiki } from "../extensions/llm-wiki/lib/recall.js";
-import { saveInsight } from "../extensions/llm-wiki/lib/retro.js";
-import { captureText } from "../extensions/llm-wiki/lib/source-packet.js";
-import {
-  ensureVaultStructure,
-  getVaultPaths,
-  readJson,
-  writeJson,
-} from "../extensions/llm-wiki/lib/utils.js";
-import { inspectWritableVault } from "../extensions/llm-wiki/lib/vault-format.js";
+import { ensureVaultStructure, getVaultPaths, readJson } from "../extensions/llm-wiki/lib/utils.js";
 
 const vaultRoots: string[] = [];
 function createVault(config: Record<string, unknown>) {
@@ -41,6 +32,125 @@ function writeDoc(
   const fullPath = join(paths.wiki, doc.path);
   mkdirSync(join(fullPath, ".."), { recursive: true });
   writeFileSync(fullPath, serializeKnowledgeDocument(doc), "utf8");
+}
+
+type RegisteredTool = {
+  execute: (...args: unknown[]) => Promise<unknown>;
+};
+type ExtensionHandler = (...args: unknown[]) => unknown;
+
+function registerFullExtensionHarness(root: string) {
+  const handlers = new Map<string, ExtensionHandler[]>();
+  const tools = new Map<string, RegisteredTool>();
+  const messages: unknown[] = [];
+  const pi = {
+    on: (name: string, handler: ExtensionHandler) => {
+      handlers.set(name, [...(handlers.get(name) ?? []), handler]);
+    },
+    registerTool: (tool: RegisteredTool & { name: string }) => tools.set(tool.name, tool),
+    registerCommand: () => {},
+    sendMessage: (message: unknown) => messages.push(message),
+  } as unknown as ExtensionAPI;
+
+  const registerCwd = process.cwd();
+  const registerHome = process.env.WIKI_HOME;
+  process.chdir(root);
+  process.env.WIKI_HOME = root;
+  try {
+    extension(pi);
+  } finally {
+    process.chdir(registerCwd);
+    if (registerHome === undefined) Reflect.deleteProperty(process.env, "WIKI_HOME");
+    else process.env.WIKI_HOME = registerHome;
+  }
+
+  async function atRoot<T>(work: () => Promise<T>): Promise<T> {
+    const priorCwd = process.cwd();
+    const priorHome = process.env.WIKI_HOME;
+    process.chdir(root);
+    process.env.WIKI_HOME = root;
+    try {
+      return await work();
+    } finally {
+      process.chdir(priorCwd);
+      if (priorHome === undefined) Reflect.deleteProperty(process.env, "WIKI_HOME");
+      else process.env.WIKI_HOME = priorHome;
+    }
+  }
+
+  return {
+    messages,
+    emit: (name: string, event: unknown = {}, ctx: unknown = {}) =>
+      atRoot(async () => {
+        const results: unknown[] = [];
+        for (const handler of handlers.get(name) ?? []) results.push(await handler(event, ctx));
+        return results;
+      }),
+    execute: (name: string, params: Record<string, unknown>) =>
+      atRoot(async () => {
+        const tool = tools.get(name);
+        if (!tool) throw new Error(`Tool not registered: ${name}`);
+        return tool.execute("test", params, undefined, undefined, {
+          cwd: root,
+          hasUI: false,
+          ui: { setStatus: () => {}, notify: () => {} },
+          model: { provider: "test", id: "model" },
+          modelRegistry: {
+            find: () => undefined,
+            getApiKeyAndHeaders: async () => ({ ok: false }),
+          },
+        });
+      }),
+  };
+}
+
+function collectConceptFiles(wiki: string, directory = wiki): string[] {
+  const files: string[] = [];
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    const fullPath = join(directory, entry.name);
+    if (entry.isDirectory()) files.push(...collectConceptFiles(wiki, fullPath));
+    if (!entry.isFile() || !entry.name.toLowerCase().endsWith(".md")) continue;
+    const name = entry.name.toLowerCase();
+    if (name === "index.md" || name === "log.md") continue;
+    files.push(relative(wiki, fullPath).replace(/\\/g, "/"));
+  }
+  return files.sort();
+}
+
+function collectProjectionFiles(paths: ReturnType<typeof getVaultPaths>): string[] {
+  const files = [
+    "meta/registry.json",
+    "meta/backlinks.json",
+    "meta/index.md",
+    "meta/log.md",
+    "wiki/log.md",
+  ];
+  function indexes(directory: string): void {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const fullPath = join(directory, entry.name);
+      if (entry.isDirectory()) indexes(fullPath);
+      else if (entry.isFile() && entry.name.toLowerCase() === "index.md") {
+        files.push(relative(paths.dotWiki, fullPath).replace(/\\/g, "/"));
+      }
+    }
+  }
+  indexes(paths.wiki);
+  return [...new Set(files)].sort();
+}
+
+function collectDeterministicProjectionFiles(paths: ReturnType<typeof getVaultPaths>): string[] {
+  return collectProjectionFiles(paths).filter(
+    (file) => file !== "meta/registry.json" && file !== "meta/index.md",
+  );
+}
+
+function projectionSnapshot(
+  paths: ReturnType<typeof getVaultPaths>,
+  files: string[],
+): Record<string, string> {
+  return Object.fromEntries(
+    files.map((file) => [file, readFileSync(join(paths.dotWiki, file), "utf8")]),
+  );
 }
 
 describe("OKF integration", () => {
@@ -135,188 +245,215 @@ describe("OKF integration", () => {
     }
   });
 
-  it("foundation acceptance: end-to-end OKF lifecycle", () => {
-    const paths = createVault({ knowledge_format: "okf-0.2" });
+  it("foundation acceptance: production seams preserve a conformant OKF vault", async () => {
+    const root = join(import.meta.dirname, "..", "tmp", `okf-acceptance-${Date.now()}`);
+    vaultRoots.push(root);
+    mkdirSync(root, { recursive: true });
+    writeFileSync(
+      join(root, "package.json"),
+      JSON.stringify({ name: "okf-acceptance", version: "1.0.0", description: "Acceptance" }),
+    );
+    const harness = registerFullExtensionHarness(root);
 
-    // 1. Bootstrap already done via createVault; assert config persists okf-0.2
+    await harness.emit(
+      "session_start",
+      {},
+      {
+        cwd: root,
+        hasUI: true,
+        ui: { setStatus: () => {}, notify: () => {} },
+        model: { id: "test" },
+      },
+    );
+    const paths = getVaultPaths(root);
     const config = readJson<Record<string, unknown>>(join(paths.dotWiki, "config.json"), {});
     expect(config.knowledge_format).toBe("okf-0.2");
+    const agentStartResults = await harness.emit(
+      "before_agent_start",
+      { prompt: "Build the Foundation feature", systemPrompt: "base" },
+      { cwd: root, hasUI: false, model: { id: "test" } },
+    );
+    expect(JSON.stringify(agentStartResults)).toContain("Wiki Setup Required");
+    await harness.emit(
+      "before_agent_start",
+      { prompt: "", systemPrompt: "base" },
+      { cwd: root, hasUI: false, model: { id: "test" } },
+    );
 
-    // 2. Capture text
-    const captureResult = captureText(paths, "Source content for foundation.", "Foundation Source");
-    expect(captureResult.sourceId).toMatch(/^SRC-\d{4}-\d{2}-\d{2}-\d{3}$/);
+    await harness.execute("wiki_capture_source", {
+      text: "Foundation source content.",
+      title: "Foundation Source",
+    });
+    await harness.emit("session_shutdown");
+    const sourceId = readdirSync(paths.rawSources).find((name) => name.startsWith("SRC-"));
+    expect(sourceId).toBeDefined();
+    if (!sourceId) return;
+    const manifest = readJson<Record<string, unknown>>(
+      join(paths.rawSources, sourceId, "manifest.json"),
+      {},
+    );
+    const ingest = commitSynthesis(
+      paths,
+      sourceId,
+      manifest,
+      {
+        summary: "Foundation summary.",
+        key_takeaways: ["Foundation takeaway"],
+        entities: [{ title: "Foundation Entity", description: "Entity description" }],
+        concepts: [{ title: "Foundation Concept", definition: "Concept definition" }],
+      },
+      "2026-08-03",
+    );
+    expect(ingest.ok).toBe(true);
 
-    // 3. Create an observation
-    const obsResult = saveObservation(paths, {
-      title: "Foundation test observation",
-      content: "This is a test observation for foundation acceptance.",
+    await harness.execute("wiki_observe", {
+      title: "Foundation observation",
+      content: "Observation body.",
       relevance: "medium",
     });
-    expect(obsResult.pagePath).toContain("sources/");
-
-    // 4. Create a retro
-    const retroResult = saveInsight(
-      paths,
-      "foundation-test-insight",
-      "Foundation Test Insight",
-      "Test insight body.",
-      "test",
-      { rebuild: false },
-    );
-    expect(retroResult.sourcePagePath).toContain("sources/foundation-test-insight.md");
-
-    // 5. Create a requirement through wiki_ensure_page equivalent
-    const reqSlug = "test-requirement";
-    const reqPath = join(paths.wiki, "requirements", `${reqSlug}.md`);
-    mkdirSync(join(paths.wiki, "requirements"), { recursive: true });
-    const reqDoc = createKnowledgeDocument(
-      `requirements/${reqSlug}.md`,
-      {
-        type: "requirement",
-        title: "Test Requirement",
-        created: new Date().toISOString().split("T")[0],
-        updated: new Date().toISOString().split("T")[0],
-      },
-      "This is a test requirement for foundation acceptance.",
-    );
-    writeKnowledgeDocumentFile(reqPath, reqDoc);
-    appendEvent(paths, {
-      kind: "ensure_page",
-      page_type: "requirement",
-      title: "Test Requirement",
-      path: `requirements/${reqSlug}`,
+    await harness.execute("wiki_retro", {
+      slug: "foundation-insight",
+      title: "Foundation Insight",
+      body: "Insight body.",
     });
-
-    // 6. Rebuild once
-    rebuildMetadata(paths);
-
-    // 7. Parse every resulting .md file with parseKnowledgeDocument
-    const allMdFiles: string[] = [];
-    function collectMd(dir: string, prefix = "") {
-      for (const entry of readdirSync(dir)) {
-        const fullPath = join(dir, entry);
-        const relPath = join(prefix, entry);
-        if (entry.endsWith(".md")) {
-          allMdFiles.push(relPath);
-        } else if (entry !== "node_modules") {
-          collectMd(fullPath, relPath);
-        }
-      }
-    }
-    collectMd(paths.wiki);
-
-    for (const file of allMdFiles) {
-      // Skip generated OKF projections (different format)
-      if (file === "index.md" || file === "log.md" || file.endsWith("/index.md")) continue;
-      const content = readFileSync(join(paths.wiki, file), "utf8");
-      const parsed = parseKnowledgeDocument(content, file);
-      expect(parsed.ok, `Failed to parse ${file}`).toBe(true);
-    }
-
-    // 8. Assert all known-source pages use canonical mapping-sequence sources
-    const sourcePage = readFileSync(
-      join(paths.wiki, "sources", `${captureResult.sourceId}.md`),
-      "utf8",
+    await harness.execute("wiki_ensure_page", {
+      type: "requirement",
+      title: "Foundation Requirement",
+      content: "Requirement body.",
+    });
+    await harness.emit("session_shutdown");
+    const recalled = await harness.emit(
+      "before_agent_start",
+      { prompt: "Foundation Requirement", systemPrompt: "base" },
+      { cwd: root, hasUI: true, ui: { setStatus: () => {} }, model: { id: "test" } },
     );
-    const sourceParsed = parseKnowledgeDocument(sourcePage, `sources/${captureResult.sourceId}.md`);
-    expect(sourceParsed.ok).toBe(true);
-    if (sourceParsed.ok) {
-      // Source pages should have their own ID as a source reference
-      expect(sourceParsed.document.sources).toBeDefined();
-    }
+    expect(JSON.stringify(recalled)).toContain("Foundation Requirement");
 
-    // 9. Assert generated bodies use standard Markdown links
-    const obsContent = readFileSync(obsResult.pagePath, "utf8");
-    expect(obsContent).not.toMatch(/\[\[.*\]\]/);
-
-    // 10. Assert legacy [[wikilink]] remains readable
-    const legacyLinkContent = `---
-type: concept
-title: Legacy Link Concept
-description: Has legacy wikilink
----
-
-This concept references [[concepts/foundation-test-insight]].
-`;
-    const legacyPath = join(paths.wiki, "concepts", "legacy-link.md");
-    mkdirSync(join(paths.wiki, "concepts"), { recursive: true });
-    writeFileSync(legacyPath, legacyLinkContent);
-    rebuildMetadata(paths);
-
-    // Legacy page should be in registry
-    const registry = readJson<{ pages: Record<string, unknown> }>(
+    const manualPage = join(paths.wiki, "concepts", "legacy-link.md");
+    const eventPath = join(paths.meta, "events.jsonl");
+    const eventsBeforeManual = readFileSync(eventPath, "utf8");
+    writeFileSync(
+      manualPage,
+      "---\ntype: concept\ntitle: Legacy Link\n---\n\n[[sources/foundation-insight]]\n",
+    );
+    await harness.emit("tool_result", { toolName: "write", input: { path: manualPage } });
+    await harness.emit("turn_end", {}, { cwd: root, hasUI: false });
+    await harness.emit("session_shutdown");
+    const registryAfterManual = readJson<{ pages: Record<string, unknown> }>(
       join(paths.meta, "registry.json"),
       { pages: {} },
     );
-    expect(registry.pages["concepts/legacy-link"]).toBeDefined();
+    expect(registryAfterManual.pages["concepts/legacy-link"]).toBeDefined();
+    expect(readFileSync(eventPath, "utf8")).toBe(eventsBeforeManual);
 
-    // 11. Rebuild twice and assert every OKF index/log byte is identical
-    rebuildMetadata(paths);
-    const index1 = readFileSync(join(paths.wiki, "index.md"), "utf8");
-    const log1 = readFileSync(join(paths.wiki, "log.md"), "utf8");
-
-    rebuildMetadata(paths);
-    const index2 = readFileSync(join(paths.wiki, "index.md"), "utf8");
-    const log2 = readFileSync(join(paths.wiki, "log.md"), "utf8");
-
-    expect(index1).toBe(index2);
-    expect(log1).toBe(log2);
-
-    // 12. Corrupt one concept, rebuild, and assert last known-good projections remain
-    const goodConceptPath = join(paths.wiki, "concepts", "good.md");
-    mkdirSync(join(paths.wiki, "concepts"), { recursive: true });
-    writeFileSync(
-      goodConceptPath,
-      `---
-type: concept
-title: Good Concept
-description: A good concept
----
-
-Good content.
-`,
-    );
-    rebuildMetadata(paths);
-    const indexBeforeCorrupt = readFileSync(join(paths.wiki, "index.md"), "utf8");
-
-    // Corrupt the concept
-    writeFileSync(goodConceptPath, "CORRUPT CONTENT");
-    rebuildMetadata(paths);
-    const indexAfterCorrupt = readFileSync(join(paths.wiki, "index.md"), "utf8");
-
-    // Index should still be valid (corrupt page excluded)
-    expect(indexAfterCorrupt).toContain("okf_version");
-
-    // 13. Restore the concept and assert rebuild recovers
-    writeFileSync(
-      goodConceptPath,
-      `---
-type: concept
-title: Good Concept
-description: A good concept
----
-
-Good content restored.
-`,
-    );
-    const restoreResult = rebuildMetadata(paths);
-    expect(restoreResult.ok).toBe(true);
-    // Verify the concept is back in the registry
-    const finalRegistry = readJson<{ pages: Record<string, unknown> }>(
-      join(paths.meta, "registry.json"),
-      { pages: {} },
-    );
-    expect(finalRegistry.pages["concepts/good"]).toBeDefined();
-
-    // 14. Assert no import/export/migration/trust-scoring tools are registered
-    const toolsSource = readFileSync(
-      join(import.meta.dirname, "..", "extensions", "llm-wiki", "lib", "tools.ts"),
-      "utf8",
-    );
-    const forbiddenPatterns = ["wiki_import", "wiki_export", "wiki_migrate", "wiki_trust"];
-    for (const pattern of forbiddenPatterns) {
-      expect(toolsSource).not.toContain(pattern);
+    const conceptFiles = collectConceptFiles(paths.wiki);
+    for (const file of conceptFiles) {
+      const parsed = parseKnowledgeDocument(readFileSync(join(paths.wiki, file), "utf8"), file);
+      expect(parsed.ok, file).toBe(true);
     }
+
+    for (const file of ["entities/foundation-entity.md", "concepts/foundation-concept.md"]) {
+      const parsed = parseKnowledgeDocument(readFileSync(join(paths.wiki, file), "utf8"), file);
+      expect(parsed.ok).toBe(true);
+      if (parsed.ok) expect(parsed.document.sources.kind).toBe("canonical");
+    }
+    const source = parseKnowledgeDocument(
+      readFileSync(join(paths.wiki, "sources", `${sourceId}.md`), "utf8"),
+      `sources/${sourceId}.md`,
+    );
+    expect(source.ok).toBe(true);
+    if (source.ok) expect(source.document.sources.kind).toBe("absent");
+
+    const backlinks = readJson<Record<string, string[]>>(join(paths.meta, "backlinks.json"), {});
+    expect(backlinks["sources/foundation-insight"]).toContain("concepts/legacy-link");
+
+    const projectionFiles = collectProjectionFiles(paths);
+    const deterministicFiles = collectDeterministicProjectionFiles(paths);
+    const deterministic = projectionSnapshot(paths, deterministicFiles);
+    expect(rebuildMetadata(paths).ok).toBe(true);
+    expect(projectionSnapshot(paths, deterministicFiles)).toEqual(deterministic);
+    const knownGood = projectionSnapshot(paths, projectionFiles);
+
+    const corrupt = join(paths.wiki, "concepts", "foundation-concept.md");
+    const original = readFileSync(corrupt, "utf8");
+    writeFileSync(corrupt, "malformed\n");
+    await harness.emit("tool_result", { toolName: "edit", input: { path: corrupt } });
+    await harness.emit("turn_end", {}, { cwd: root, hasUI: false });
+    await harness.emit("session_shutdown");
+    expect(projectionSnapshot(paths, projectionFiles)).toEqual(knownGood);
+    expect(readFileSync(eventPath, "utf8")).toBe(eventsBeforeManual);
+
+    writeFileSync(corrupt, original);
+    await harness.emit("tool_result", { toolName: "write", input: { path: corrupt } });
+    await harness.emit("turn_end", {}, { cwd: root, hasUI: false });
+    await harness.emit("session_shutdown");
+    expect(
+      readJson<{ pages: Record<string, unknown> }>(join(paths.meta, "registry.json"), { pages: {} })
+        .pages["concepts/foundation-concept"],
+    ).toBeDefined();
+  });
+
+  it("skips before-agent recall when no vault exists", async () => {
+    const root = join(import.meta.dirname, "..", "tmp", `okf-no-vault-${Date.now()}`);
+    vaultRoots.push(root);
+    mkdirSync(root, { recursive: true });
+    const harness = registerFullExtensionHarness(root);
+    const result = await harness.emit(
+      "before_agent_start",
+      { prompt: "anything", systemPrompt: "base" },
+      { cwd: root, hasUI: false, model: { id: "test" } },
+    );
+    expect(result).toEqual([undefined]);
+  });
+
+  it("opens an existing valid vault without bootstrapping it again", async () => {
+    const root = join(import.meta.dirname, "..", "tmp", `okf-existing-${Date.now()}`);
+    vaultRoots.push(root);
+    const paths = getVaultPaths(root);
+    ensureVaultStructure(paths);
+    const config = JSON.stringify({ name: "Existing", knowledge_format: "legacy" });
+    writeFileSync(join(paths.dotWiki, "config.json"), config);
+    const statuses: string[] = [];
+    const harness = registerFullExtensionHarness(root);
+    await harness.emit(
+      "session_start",
+      {},
+      {
+        cwd: root,
+        hasUI: true,
+        ui: { setStatus: (_key: string, value: string) => statuses.push(value) },
+        model: { id: "test" },
+      },
+    );
+    expect(readFileSync(join(paths.dotWiki, "config.json"), "utf8")).toBe(config);
+    expect(existsSync(join(paths.meta, "events.jsonl"))).toBe(false);
+    expect(statuses.some((status) => status.includes("setup blocked"))).toBe(false);
+    expect(harness.messages.length).toBeGreaterThan(0);
+  });
+
+  it("blocks an existing invalid vault before status notices or lifecycle writes", async () => {
+    const root = join(import.meta.dirname, "..", "tmp", `okf-blocked-${Date.now()}`);
+    vaultRoots.push(root);
+    const paths = getVaultPaths(root);
+    ensureVaultStructure(paths);
+    const config = JSON.stringify({ knowledge_format: "future" });
+    writeFileSync(join(paths.dotWiki, "config.json"), config);
+    const statuses: string[] = [];
+    const harness = registerFullExtensionHarness(root);
+    await harness.emit(
+      "session_start",
+      {},
+      {
+        cwd: root,
+        hasUI: true,
+        ui: { setStatus: (_key: string, value: string) => statuses.push(value) },
+        model: { id: "test" },
+      },
+    );
+    expect(statuses.some((status) => status.includes("setup blocked"))).toBe(true);
+    expect(harness.messages).toEqual([]);
+    expect(readFileSync(join(paths.dotWiki, "config.json"), "utf8")).toBe(config);
+    expect(existsSync(join(paths.meta, "events.jsonl"))).toBe(false);
   });
 
   it("only registers Foundation-required tools", () => {

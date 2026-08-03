@@ -3,7 +3,6 @@ import { extname, join } from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { createKnowledgeDocument, serializeKnowledgeDocument } from "./knowledge-document.js";
 import { appendEvent } from "./metadata.js";
-import { assertWritableVault } from "./vault-format.js";
 import {
   type ExtractedContent,
   binaryExtractionFailureMessage,
@@ -20,6 +19,7 @@ import {
   readText,
   writeJson,
 } from "./utils.js";
+import { assertWritableVault } from "./vault-format.js";
 
 /**
  * Source packet capture and management.
