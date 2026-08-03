@@ -21,7 +21,7 @@ describe("knowledge links", () => {
       "[full][target] [collapsed][] [shortcut]",
       "![image](image.md) ![image-ref][target]",
       "<https://example.com> <concepts/inline.md>",
-      "<a href=\"inline.md\">raw</a>",
+      '<a href="inline.md">raw</a>',
       "`[code](inline.md)`",
       "\\[escaped](inline.md)",
       "",

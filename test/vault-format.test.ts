@@ -1,11 +1,11 @@
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { ensureVaultStructure, getVaultPaths, slugify } from "../extensions/llm-wiki/lib/utils.js";
 import {
   discoverKnowledgeDocuments,
   inspectVaultFormat,
 } from "../extensions/llm-wiki/lib/vault-format.js";
-import { ensureVaultStructure, getVaultPaths, slugify } from "../extensions/llm-wiki/lib/utils.js";
 
 const roots: string[] = [];
 function vault(config: Record<string, unknown>) {

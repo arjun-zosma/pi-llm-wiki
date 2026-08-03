@@ -1,6 +1,6 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { posix } from "node:path";
-import { isAlias, isMap, isScalar, isSeq, parseAllDocuments, stringify } from "yaml";
+import { type Document, isAlias, isMap, isScalar, isSeq, parseAllDocuments, stringify } from "yaml";
 
 export const FRONTMATTER_MAX_BYTES = 128 * 1024;
 export const FRONTMATTER_MAX_DEPTH = 32;
@@ -146,13 +146,7 @@ const STANDARD_FIELDS = new Set([
   "source_id",
 ]);
 
-const LEGACY_COMPAT_FIELDS = new Set([
-  "created",
-  "updated",
-  "summary",
-  "raw_path",
-  "source_id",
-]);
+const LEGACY_COMPAT_FIELDS = new Set(["created", "updated", "summary", "raw_path", "source_id"]);
 
 function diag(
   severity: DiagnosticSeverity,
@@ -261,13 +255,15 @@ function parseFrontmatterBlock(
   const diagnostics: KnowledgeDiagnostic[] = [];
 
   // Normalize line endings
-  let normalized = content.replace(/\r\n?/g, "\n");
+  const normalized = content.replace(/\r\n?/g, "\n");
 
   // Require opening --- on line 1
   if (!normalized.startsWith("---")) {
     return {
       ok: false,
-      diagnostics: [diag("error", "frontmatter_missing", path, "Missing frontmatter opening delimiter")],
+      diagnostics: [
+        diag("error", "frontmatter_missing", path, "Missing frontmatter opening delimiter"),
+      ],
     };
   }
 
@@ -310,7 +306,9 @@ function parseFrontmatterBlock(
   if (closingIndex === -1) {
     return {
       ok: false,
-      diagnostics: [diag("error", "frontmatter_parse_error", path, "Missing frontmatter closing delimiter")],
+      diagnostics: [
+        diag("error", "frontmatter_parse_error", path, "Missing frontmatter closing delimiter"),
+      ],
     };
   }
 
@@ -321,12 +319,19 @@ function parseFrontmatterBlock(
   if (byteLength > FRONTMATTER_MAX_BYTES) {
     return {
       ok: false,
-      diagnostics: [diag("error", "frontmatter_limit_bytes", path, `Frontmatter exceeds ${FRONTMATTER_MAX_BYTES} bytes`)],
+      diagnostics: [
+        diag(
+          "error",
+          "frontmatter_limit_bytes",
+          path,
+          `Frontmatter exceeds ${FRONTMATTER_MAX_BYTES} bytes`,
+        ),
+      ],
     };
   }
 
   // Parse with yaml library - use lenient mode first, then validate
-  let docs;
+  let docs: Document[];
   try {
     docs = parseAllDocuments(yamlText, {
       schema: "core",
@@ -354,7 +359,14 @@ function parseFrontmatterBlock(
   if (docs.length !== 1) {
     return {
       ok: false,
-      diagnostics: [diag("error", "frontmatter_multiple_documents", path, "Multiple YAML documents in frontmatter")],
+      diagnostics: [
+        diag(
+          "error",
+          "frontmatter_multiple_documents",
+          path,
+          "Multiple YAML documents in frontmatter",
+        ),
+      ],
     };
   }
 
@@ -365,7 +377,9 @@ function parseFrontmatterBlock(
   if (!isMap(contents)) {
     return {
       ok: false,
-      diagnostics: [diag("error", "frontmatter_parse_error", path, "Frontmatter must be a YAML mapping")],
+      diagnostics: [
+        diag("error", "frontmatter_parse_error", path, "Frontmatter must be a YAML mapping"),
+      ],
     };
   }
 
@@ -373,7 +387,9 @@ function parseFrontmatterBlock(
   if (hasAlias(contents)) {
     return {
       ok: false,
-      diagnostics: [diag("error", "frontmatter_alias_forbidden", path, "YAML aliases are not allowed")],
+      diagnostics: [
+        diag("error", "frontmatter_alias_forbidden", path, "YAML aliases are not allowed"),
+      ],
     };
   }
 
@@ -381,7 +397,9 @@ function parseFrontmatterBlock(
   if (hasCustomTag(contents)) {
     return {
       ok: false,
-      diagnostics: [diag("error", "frontmatter_custom_tag_forbidden", path, "Custom YAML tags are not allowed")],
+      diagnostics: [
+        diag("error", "frontmatter_custom_tag_forbidden", path, "Custom YAML tags are not allowed"),
+      ],
     };
   }
 
@@ -412,7 +430,14 @@ function parseFrontmatterBlock(
   if (depth > FRONTMATTER_MAX_DEPTH) {
     return {
       ok: false,
-      diagnostics: [diag("error", "frontmatter_limit_depth", path, `Frontmatter nesting exceeds ${FRONTMATTER_MAX_DEPTH}`)],
+      diagnostics: [
+        diag(
+          "error",
+          "frontmatter_limit_depth",
+          path,
+          `Frontmatter nesting exceeds ${FRONTMATTER_MAX_DEPTH}`,
+        ),
+      ],
     };
   }
 
@@ -436,7 +461,11 @@ function parseFrontmatterBlock(
 
   // Require type field
   const rawType = mapping.type;
-  if (rawType === undefined || rawType === null || (typeof rawType === "string" && rawType.trim() === "")) {
+  if (
+    rawType === undefined ||
+    rawType === null ||
+    (typeof rawType === "string" && rawType.trim() === "")
+  ) {
     return {
       ok: false,
       diagnostics: [diag("error", "concept_missing_type", path, "Missing or empty type field")],
@@ -576,7 +605,10 @@ export function createKnowledgeDocument(
   };
 }
 
-export function patchKnowledgeDocument(document: KnowledgeDocument, patch: KnowledgePatch): KnowledgeDocument {
+export function patchKnowledgeDocument(
+  document: KnowledgeDocument,
+  patch: KnowledgePatch,
+): KnowledgeDocument {
   const newFrontmatter = { ...document.frontmatter };
   if (patch.fields) {
     for (const [key, value] of Object.entries(patch.fields)) {

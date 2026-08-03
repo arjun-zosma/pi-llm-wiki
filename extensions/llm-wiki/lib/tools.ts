@@ -5,14 +5,7 @@ import { Type } from "typebox";
 import { launchEmbedPages, reindexEmbeddings, resolveEmbedder } from "./embeddings.js";
 import { scheduleReindex } from "./indexing.js";
 import { runIngestSynthesis } from "./ingest-worker.js";
-import {
-  type Registry,
-  appendEvent,
-  buildBacklinks,
-  buildRegistry,
-  rebuildMetadata,
-  rebuildMetadataLight,
-} from "./metadata.js";
+import { type Registry, appendEvent, rebuildMetadata, rebuildMetadataLight } from "./metadata.js";
 import type { Runtime } from "./runtime.js";
 import { captureFile, captureText, captureUrl } from "./source-packet.js";
 import { parseModelRef } from "./task-config.js";
@@ -846,9 +839,14 @@ export function registerWikiLint(pi: ExtensionAPI, runtime?: Runtime): void {
  * run off-thread via `dispatchReported`). Returns the human-readable summary.
  */
 function runWikiLint(paths: VaultPaths, autoFix: boolean): string {
+  // Ensure metadata is current
+  rebuildMetadata(paths);
+  const registry = readJson<Registry>(join(paths.meta, "registry.json"), {
+    version: "1.0",
+    last_updated: "",
+    pages: {},
+  });
   const pages = findWikiPages(paths.wiki);
-  const registry = buildRegistry(paths);
-  buildBacklinks(paths, registry); // ensures backlinks.json is current
 
   const findings: string[] = [];
   let orphans = 0;
@@ -1178,10 +1176,8 @@ export function registerWikiLogEvent(pi: ExtensionAPI): void {
 
       appendEvent(paths, { kind: params.kind, ...params.details });
 
-      // Regenerate log.md
-      const { buildLogMarkdown } = await import("./metadata.js");
-      const log = buildLogMarkdown(paths);
-      writeFileSync(join(paths.meta, "log.md"), log, "utf-8");
+      // Regenerate projections
+      rebuildMetadata(paths);
 
       return {
         content: [{ type: "text", text: `✅ Event logged: ${params.kind}` }],

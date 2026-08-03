@@ -1,9 +1,9 @@
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { readFileSync, readdirSync, statSync } from "node:fs";
 import { normalize } from "node:path";
 import { posix } from "node:path";
 import {
-  KnowledgeDiagnostic,
-  KnowledgeDocument,
+  type KnowledgeDiagnostic,
+  type KnowledgeDocument,
   parseKnowledgeDocument,
   parseMarkdownFrontmatter,
 } from "./knowledge-document.js";
@@ -49,7 +49,9 @@ function isReservedName(filename: string): boolean {
   return name === "index.md" || name === "log.md";
 }
 
-function readConfigJson(dotWiki: string): { ok: true; config: Record<string, unknown> } | { ok: false; error: string } {
+function readConfigJson(
+  dotWiki: string,
+): { ok: true; config: Record<string, unknown> } | { ok: false; error: string } {
   const path = posix.join(dotWiki, "config.json");
   try {
     const content = readFileSync(path, "utf8");
@@ -92,13 +94,19 @@ export function inspectVaultFormat(paths: VaultPaths): VaultFormatState {
     return {
       knowledgeFormat: "legacy",
       diagnostics: [
-        diag("error", "config_invalid_knowledge_format", "config.json", `Invalid knowledge_format value: ${JSON.stringify(rawFormat)}`),
+        diag(
+          "error",
+          "config_invalid_knowledge_format",
+          "config.json",
+          `Invalid knowledge_format value: ${JSON.stringify(rawFormat)}`,
+        ),
       ],
       blocking: true,
     };
   }
 
   // In OKF mode, check root index version
+  // Missing root index is repairable; version mismatch blocks until explicitly handled
   if (format === "okf-0.2") {
     const rootIndexPath = posix.join(paths.wiki, "index.md");
     try {
@@ -117,7 +125,7 @@ export function inspectVaultFormat(paths: VaultPaths): VaultFormatState {
           blocking = true;
         }
       }
-      // Missing root index is repairable, not blocking
+      // Missing root index is repairable
     } catch {
       // Missing root index is repairable
     }
@@ -234,7 +242,12 @@ export function discoverKnowledgeDocuments(paths: VaultPaths): DiscoveryResult {
     } catch (e: unknown) {
       const err = e as Error;
       diagnostics.push(
-        diag("error", "frontmatter_parse_error", normalizedPath, `Failed to read file: ${err.message}`),
+        diag(
+          "error",
+          "frontmatter_parse_error",
+          normalizedPath,
+          `Failed to read file: ${err.message}`,
+        ),
       );
       blocking = true;
     }

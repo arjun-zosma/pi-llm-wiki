@@ -1,11 +1,58 @@
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
-import { createKnowledgeDocument } from "../extensions/llm-wiki/lib/knowledge-document.js";
-import { buildDirectoryIndexes, buildOkfLog } from "../extensions/llm-wiki/lib/metadata.js";
+import { afterEach, describe, expect, it } from "vitest";
+import {
+  createKnowledgeDocument,
+  serializeKnowledgeDocument,
+} from "../extensions/llm-wiki/lib/knowledge-document.js";
+import {
+  buildDirectoryIndexes,
+  buildOkfLog,
+  rebuildMetadata,
+} from "../extensions/llm-wiki/lib/metadata.js";
+import { ensureVaultStructure, getVaultPaths } from "../extensions/llm-wiki/lib/utils.js";
 
 function readFixture(rel: string): string {
   return readFileSync(join(import.meta.dirname, "fixtures", "okf", rel), "utf8");
+}
+
+// Temp vault helpers for rebuild integration tests
+const vaultRoots: string[] = [];
+function createVault(config: Record<string, unknown>) {
+  const root = join(import.meta.dirname, "..", "tmp", `okf-${Date.now()}-${Math.random()}`);
+  vaultRoots.push(root);
+  const paths = getVaultPaths(root);
+  ensureVaultStructure(paths);
+  writeFileSync(join(paths.dotWiki, "config.json"), `${JSON.stringify(config)}\n`);
+  return paths;
+}
+afterEach(() => {
+  for (const root of vaultRoots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
+
+function snapshot(
+  paths: ReturnType<typeof getVaultPaths>,
+  files: string[],
+): Record<string, string> {
+  return Object.fromEntries(
+    files.map((file) => {
+      const fullPath = join(paths.dotWiki, file);
+      try {
+        return [file, readFileSync(fullPath, "utf8")];
+      } catch {
+        return [file, "<missing>"];
+      }
+    }),
+  );
+}
+
+function writeDoc(
+  paths: ReturnType<typeof getVaultPaths>,
+  doc: ReturnType<typeof createKnowledgeDocument>,
+) {
+  const fullPath = join(paths.wiki, doc.path);
+  mkdirSync(join(fullPath, ".."), { recursive: true });
+  writeFileSync(fullPath, serializeKnowledgeDocument(doc), "utf8");
 }
 
 describe("OKF projections", () => {
@@ -81,7 +128,12 @@ describe("OKF projections", () => {
 
   it("renders log deterministically independent of object key order", () => {
     const events = [
-      JSON.stringify({ timestamp: "2026-08-01T22:00:00.000Z", kind: "capture", a: { a: 1, z: 2 }, z: 1 }),
+      JSON.stringify({
+        timestamp: "2026-08-01T22:00:00.000Z",
+        kind: "capture",
+        a: { a: 1, z: 2 },
+        z: 1,
+      }),
     ].join("\n");
     const log = buildOkfLog(events);
     expect(log.markdown).toContain('{"a":{"a":1,"z":2},"z":1}');
@@ -91,5 +143,219 @@ describe("OKF projections", () => {
     const log = buildOkfLog("");
     expect(log.markdown).toBe("# Wiki Update Log\n");
     expect(log.diagnostics).toEqual([]);
+  });
+});
+
+describe("OKF rebuild integration", () => {
+  it("legacy mode builds only meta/ projections and leaves wiki/index.md and wiki/log.md unchanged", () => {
+    const paths = createVault({ knowledge_format: "legacy" });
+    writeDoc(
+      paths,
+      createKnowledgeDocument("concepts/test.md", { type: "concept", title: "Test" }, "Body."),
+    );
+    writeFileSync(join(paths.wiki, "index.md"), "user root index");
+    writeFileSync(join(paths.wiki, "log.md"), "user log");
+
+    rebuildMetadata(paths);
+
+    // meta/ projections exist
+    expect(readFileSync(join(paths.meta, "registry.json"), "utf8")).toContain("test");
+    expect(readFileSync(join(paths.meta, "backlinks.json"), "utf8")).toContain("test");
+
+    // wiki/ files unchanged
+    expect(readFileSync(join(paths.wiki, "index.md"), "utf8")).toBe("user root index");
+    expect(readFileSync(join(paths.wiki, "log.md"), "utf8")).toBe("user log");
+  });
+
+  it("OKF mode builds root/subdirectory indexes and root log, then prunes obsolete indexes", () => {
+    const paths = createVault({ knowledge_format: "okf-0.2" });
+    writeDoc(
+      paths,
+      createKnowledgeDocument(
+        "concepts/nested/deep.md",
+        { type: "concept", title: "Deep" },
+        "Body.",
+      ),
+    );
+    writeDoc(
+      paths,
+      createKnowledgeDocument("concepts/rag.md", { type: "concept", title: "RAG" }, "Body."),
+    );
+
+    rebuildMetadata(paths);
+    expect(readFileSync(join(paths.wiki, "index.md"), "utf8")).toContain('okf_version: "0.2"');
+    expect(readFileSync(join(paths.wiki, "concepts/index.md"), "utf8")).toContain("## Directories");
+    expect(readFileSync(join(paths.wiki, "concepts/nested/index.md"), "utf8")).toContain("Deep");
+
+    // Delete nested concept and rebuild
+    rmSync(join(paths.wiki, "concepts/nested/deep.md"));
+    rebuildMetadata(paths);
+    // Obsolete nested index pruned; concepts/index.md no longer lists nested/
+    expect(readFileSync(join(paths.wiki, "concepts/index.md"), "utf8")).not.toContain("nested/");
+    expect(() => readFileSync(join(paths.wiki, "concepts/nested/index.md"), "utf8")).toThrow();
+  });
+
+  it("merges Markdown and wikilink edges and stores only known targets", () => {
+    const paths = createVault({ knowledge_format: "okf-0.2" });
+    writeDoc(
+      paths,
+      createKnowledgeDocument("concepts/a.md", { type: "concept", title: "A" }, "Body."),
+    );
+    writeDoc(
+      paths,
+      createKnowledgeDocument(
+        "concepts/b.md",
+        { type: "concept", title: "B", description: "Links to A" },
+        "[link](/concepts/a.md) [[concepts/a]]",
+      ),
+    );
+
+    rebuildMetadata(paths);
+    const backlinks = JSON.parse(readFileSync(join(paths.meta, "backlinks.json"), "utf8"));
+    expect(backlinks["concepts/a"]).toEqual(["concepts/b"]);
+  });
+
+  it("malformed concept after successful generation leaves all previous projections byte-identical", () => {
+    const paths = createVault({ knowledge_format: "okf-0.2" });
+    writeDoc(
+      paths,
+      createKnowledgeDocument("concepts/good.md", { type: "concept", title: "Good" }, "Body."),
+    );
+
+    rebuildMetadata(paths);
+    const before = snapshot(paths, [
+      "meta/registry.json",
+      "meta/backlinks.json",
+      "meta/index.md",
+      "meta/log.md",
+      "wiki/index.md",
+      "wiki/log.md",
+    ]);
+
+    // Write malformed concept
+    writeFileSync(
+      join(paths.wiki, "concepts/bad.md"),
+      "---\ntype: concept\ntype: duplicate\n---\n",
+    );
+
+    rebuildMetadata(paths);
+    const after = snapshot(paths, [
+      "meta/registry.json",
+      "meta/backlinks.json",
+      "meta/index.md",
+      "meta/log.md",
+      "wiki/index.md",
+      "wiki/log.md",
+    ]);
+
+    // All projections unchanged
+    expect(after).toEqual(before);
+  });
+
+  it("unsupported OKF root version blocks rebuild and leaves all previous projections byte-identical", () => {
+    const paths = createVault({ knowledge_format: "okf-0.2" });
+    writeDoc(
+      paths,
+      createKnowledgeDocument("concepts/good.md", { type: "concept", title: "Good" }, "Body."),
+    );
+
+    rebuildMetadata(paths);
+    const beforeRegistry = JSON.parse(readFileSync(join(paths.meta, "registry.json"), "utf8"));
+    const beforeBacklinks = JSON.parse(readFileSync(join(paths.meta, "backlinks.json"), "utf8"));
+    const beforeWikiIndex = readFileSync(join(paths.wiki, "index.md"), "utf8");
+    const beforeWikiLog = readFileSync(join(paths.wiki, "log.md"), "utf8");
+
+    // Corrupt root index with unsupported version
+    writeFileSync(join(paths.wiki, "index.md"), '---\nokf_version: "0.3"\n---\n');
+
+    const result = rebuildMetadata(paths);
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics[0].code).toBe("okf_version_mismatch");
+
+    // All projections unchanged
+    const afterRegistry = JSON.parse(readFileSync(join(paths.meta, "registry.json"), "utf8"));
+    const afterBacklinks = JSON.parse(readFileSync(join(paths.meta, "backlinks.json"), "utf8"));
+    const afterWikiIndex = readFileSync(join(paths.wiki, "index.md"), "utf8");
+    const afterWikiLog = readFileSync(join(paths.wiki, "log.md"), "utf8");
+
+    expect(afterRegistry.pages).toEqual(beforeRegistry.pages);
+    expect(afterBacklinks).toEqual(beforeBacklinks);
+    // Corrupted index preserved (not overwritten)
+    expect(afterWikiIndex).toContain('okf_version: "0.3"');
+    expect(afterWikiLog).toEqual(beforeWikiLog);
+  });
+
+  it("invalid explicit config mode leaves all previous projections byte-identical", () => {
+    const paths = createVault({ knowledge_format: "okf-0.2" });
+    writeDoc(
+      paths,
+      createKnowledgeDocument("concepts/good.md", { type: "concept", title: "Good" }, "Body."),
+    );
+
+    rebuildMetadata(paths);
+    const before = snapshot(paths, [
+      "meta/registry.json",
+      "meta/backlinks.json",
+      "wiki/index.md",
+      "wiki/log.md",
+    ]);
+
+    // Set invalid mode
+    writeFileSync(join(paths.dotWiki, "config.json"), '{"knowledge_format": "invalid"}\n');
+
+    rebuildMetadata(paths);
+    const after = snapshot(paths, [
+      "meta/registry.json",
+      "meta/backlinks.json",
+      "wiki/index.md",
+      "wiki/log.md",
+    ]);
+
+    expect(after).toEqual(before);
+  });
+
+  it("unresolved link and malformed event line publish valid projections with non-blocking diagnostics", () => {
+    const paths = createVault({ knowledge_format: "okf-0.2" });
+    writeDoc(
+      paths,
+      createKnowledgeDocument(
+        "concepts/a.md",
+        { type: "concept", title: "A", description: "Links to missing" },
+        "[missing](missing.md)",
+      ),
+    );
+    // Write events with a malformed line
+    writeFileSync(
+      join(paths.meta, "events.jsonl"),
+      '{"timestamp":"2026-01-01T00:00:00.000Z","kind":"test"}\nnot json\n',
+    );
+
+    rebuildMetadata(paths);
+
+    // Projections still published - root index has directories, concepts index has the concept
+    expect(readFileSync(join(paths.wiki, "index.md"), "utf8")).toContain("concepts/");
+    expect(readFileSync(join(paths.wiki, "concepts/index.md"), "utf8")).toContain("A");
+    expect(readFileSync(join(paths.wiki, "log.md"), "utf8")).toContain("test");
+  });
+
+  it("no *.tmp-* files remain after success", () => {
+    const paths = createVault({ knowledge_format: "okf-0.2" });
+    writeDoc(
+      paths,
+      createKnowledgeDocument("concepts/a.md", { type: "concept", title: "A" }, "Body."),
+    );
+
+    rebuildMetadata(paths);
+
+    function findTmp(dir: string): string[] {
+      const results: string[] = [];
+      for (const entry of readdirSync(dir)) {
+        const fullPath = join(dir, entry);
+        if (entry.startsWith("tmp-")) results.push(fullPath);
+        else if (statSync(fullPath).isDirectory()) results.push(...findTmp(fullPath));
+      }
+      return results;
+    }
+    expect(findTmp(paths.dotWiki)).toEqual([]);
   });
 });

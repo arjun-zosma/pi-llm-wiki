@@ -201,7 +201,7 @@ describe("wiki directory structure", () => {
       if (reqPage) {
         const [, entry] = reqPage as [string, { type: string; title: string }];
         expect(entry.type).toBe("requirement");
-        expect(entry.title).toBe('"Test Requirement"');
+        expect(entry.title).toBe("Test Requirement");
       }
     });
 

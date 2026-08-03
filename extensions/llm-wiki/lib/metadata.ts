@@ -1,38 +1,44 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { randomUUID } from "node:crypto";
 import {
-  type VaultPaths,
-  extractWikilinks,
-  findWikiPages,
-  fmtDate,
-  parseFrontmatter,
-  readJson,
-  writeJson,
-} from "./utils.js";
-import type { KnowledgeDocument, KnowledgeDiagnostic } from "./knowledge-document.js";
-import { compareCodePoint } from "./vault-format.js";
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, join } from "node:path";
+import {
+  type KnowledgeDiagnostic,
+  type KnowledgeDocument,
+  parseKnowledgeDocument,
+} from "./knowledge-document.js";
+import { buildResolvedBacklinks, extractLegacyWikilinks } from "./knowledge-links.js";
+import type { VaultPaths } from "./utils.js";
+import { readJson, writeJson } from "./utils.js";
+import {
+  compareCodePoint,
+  discoverKnowledgeDocuments,
+  inspectVaultFormat,
+} from "./vault-format.js";
 
 /**
  * Metadata generation for the LLM Wiki.
  *
- * Rebuilds registry.json, backlinks.json, index.md, log.md, and lint-report.md
- * deterministically from the current state of raw/ and wiki/.
+ * Rebuilds registry.json, backlinks.json, index.md, log.md deterministically
+ * from the current state of wiki/ and raw/. In OKF mode, also generates
+ * wiki/index.md and wiki/log.md projections.
+ *
+ * Fail-closed: computes all outputs in memory before writing any file.
+ * Blocking diagnostics prevent any writes.
  */
 
 export interface RegistryEntry {
-  type:
-    | "source"
-    | "entity"
-    | "concept"
-    | "synthesis"
-    | "analysis"
-    | "requirement"
-    | "trajectory"
-    | "skill"
-    | "case";
+  type: string;
   title: string;
-  created: string;
-  updated: string;
+  created?: string;
+  updated?: string;
   [key: string]: unknown;
 }
 
@@ -52,85 +58,145 @@ export interface WikiEvent {
   [key: string]: unknown;
 }
 
-/** Rebuild the complete metadata layer. */
-export function rebuildMetadata(paths: VaultPaths): void {
-  mkdirSync(paths.meta, { recursive: true });
-
-  const registry = buildRegistry(paths);
-  const backlinks = buildBacklinks(paths, registry);
-
-  writeJson(join(paths.meta, "registry.json"), registry);
-  writeJson(join(paths.meta, "backlinks.json"), backlinks);
-  writeFileSync(join(paths.meta, "index.md"), buildIndexMarkdown(registry), "utf-8");
-
-  const log = buildLogMarkdown(paths);
-  writeFileSync(join(paths.meta, "log.md"), log, "utf-8");
+export interface ProjectionResult {
+  ok: boolean;
+  diagnostics: KnowledgeDiagnostic[];
+  registry?: Registry;
+  backlinks?: Backlinks;
 }
 
-/** Build registry from wiki/ and raw/ state. */
-export function buildRegistry(paths: VaultPaths): Registry {
+/** Rebuild the complete metadata layer with fail-closed semantics. */
+export function rebuildMetadata(paths: VaultPaths): ProjectionResult {
+  // Step 1: Validate vault format and mode
+  const vaultState = inspectVaultFormat(paths);
+  if (vaultState.blocking) {
+    return { ok: false, diagnostics: vaultState.diagnostics };
+  }
+
+  // Step 2: Discover all knowledge documents
+  const discovery = discoverKnowledgeDocuments(paths);
+  if (discovery.blocking) {
+    return { ok: false, diagnostics: discovery.diagnostics };
+  }
+
+  const documents = discovery.documents;
+  const allDiagnostics: KnowledgeDiagnostic[] = [
+    ...vaultState.diagnostics,
+    ...discovery.diagnostics,
+  ];
+
+  // Step 3: Build registry from documents + raw fallbacks
+  const registry = buildRegistry(paths, documents);
+
+  // Step 4: Build backlinks from discovered documents
+  const knownIds = new Set(documents.map((d) => d.id));
+  const backlinks = buildBacklinks(documents, knownIds, allDiagnostics);
+
+  // Step 5: Build meta/index.md
+  const metaIndex = buildIndexMarkdown(registry);
+
+  // Step 6: Build meta/log.md (existing rich format)
+  const metaLog = buildLogMarkdown(paths);
+
+  // Step 7: Build OKF projections if in okf-0.2 mode
+  const okfIndexes: Map<string, string> | null =
+    vaultState.knowledgeFormat === "okf-0.2"
+      ? buildDirectoryIndexes(documents, readJson(join(paths.dotWiki, "config.json"), {}))
+      : null;
+
+  const okfLog: string | null =
+    vaultState.knowledgeFormat === "okf-0.2"
+      ? buildOkfLog(readText(join(paths.meta, "events.jsonl"))).markdown
+      : null;
+
+  // Step 8: Atomic write all projections
+  mkdirSync(paths.meta, { recursive: true });
+
+  const registryJson = `${JSON.stringify(registry, null, 2)}\n`;
+  const backlinksJson = `${JSON.stringify(backlinks, null, 2)}\n`;
+
+  atomicWriteFile(join(paths.meta, "registry.json"), registryJson);
+  atomicWriteFile(join(paths.meta, "backlinks.json"), backlinksJson);
+  atomicWriteFile(join(paths.meta, "index.md"), metaIndex);
+  atomicWriteFile(join(paths.meta, "log.md"), metaLog);
+
+  // Step 9: Write OKF projections if applicable
+  if (okfIndexes && okfIndexes.size > 0) {
+    mkdirSync(paths.wiki, { recursive: true });
+    for (const [indexPath, content] of okfIndexes) {
+      atomicWriteFile(join(paths.wiki, indexPath), content);
+    }
+    // Prune obsolete generated indexes
+    pruneObsoleteIndexes(paths, okfIndexes);
+  }
+
+  if (okfLog !== null) {
+    mkdirSync(paths.wiki, { recursive: true });
+    atomicWriteFile(join(paths.wiki, "log.md"), okfLog);
+  }
+
+  return {
+    ok: true,
+    diagnostics: allDiagnostics,
+    registry,
+    backlinks,
+  };
+}
+
+/** Lightweight rebuild is the same as full rebuild. */
+export const rebuildMetadataLight = rebuildMetadata;
+
+/** Build registry from discovered documents and raw fallbacks. */
+function buildRegistry(paths: VaultPaths, documents: KnowledgeDocument[]): Registry {
   const pages: Record<string, RegistryEntry> = {};
 
-  // Scan wiki pages
-  for (const page of findWikiPages(paths.wiki)) {
-    const { frontmatter } = parseFrontmatter(page.content);
-    const type = String(frontmatter.type || "page") as RegistryEntry["type"];
-    const title = String(frontmatter.title || page.relative.split("/").pop() || "Untitled");
-
-    pages[page.relative] = {
-      type,
+  // Add discovered documents
+  for (const doc of documents) {
+    const title = getSemanticTitle(doc);
+    const entry: RegistryEntry = {
+      type: doc.frontmatter.type,
       title,
-      created: String(frontmatter.created || fmtDate()),
-      updated: String(frontmatter.updated || frontmatter.created || fmtDate()),
-      ...frontmatter,
     };
-  }
-
-  // Scan raw source packets
-  if (existsSync(paths.rawSources)) {
-    for (const entry of readdirSync(paths.rawSources)) {
-      const manifestPath = join(paths.rawSources, entry, "manifest.json");
-      if (!existsSync(manifestPath)) continue;
-
-      const manifest = readJson<Record<string, unknown>>(manifestPath, {});
-      const id = String(manifest.id || entry);
-      const sourcePage = `sources/${id}`;
-
-      if (!pages[sourcePage]) {
-        pages[sourcePage] = {
-          type: "source",
-          title: String(manifest.title || id),
-          created: String(manifest.captured || fmtDate()),
-          updated: String(manifest.captured || fmtDate()),
-          ...manifest,
-        };
+    // Copy known frontmatter fields (excluding type which is already set)
+    for (const key of [
+      "description",
+      "tags",
+      "category",
+      "domain",
+      "aliases",
+      "recall_triggers",
+      "status",
+      "stale_after",
+      "resource",
+      "generated",
+      "verified",
+      "summary",
+      "raw_path",
+      "source_id",
+    ] as const) {
+      if (doc.frontmatter[key] !== undefined) {
+        entry[key] = doc.frontmatter[key];
       }
     }
-  }
-
-  // Scan raw trajectory packets (agent working-memory). These are catalogued
-  // under the `trajectories/` namespace so distillation and recall can find
-  // them even before a canonical case/skill page has been written.
-  if (existsSync(paths.rawTrajectories)) {
-    for (const entry of readdirSync(paths.rawTrajectories)) {
-      const manifestPath = join(paths.rawTrajectories, entry, "manifest.json");
-      if (!existsSync(manifestPath)) continue;
-
-      const manifest = readJson<Record<string, unknown>>(manifestPath, {});
-      const id = String(manifest.id || entry);
-      const trajectoryPage = `trajectories/${id}`;
-
-      if (!pages[trajectoryPage]) {
-        pages[trajectoryPage] = {
-          type: "trajectory",
-          title: String(manifest.title || id),
-          created: String(manifest.captured || fmtDate()),
-          updated: String(manifest.captured || fmtDate()),
-          ...manifest,
-        };
+    // Copy extension fields
+    for (const [key, value] of Object.entries(doc.extensions)) {
+      if (!(key in entry)) {
+        entry[key] = value;
       }
     }
+    // Only include created/updated if they are non-empty strings
+    if (typeof doc.frontmatter.created === "string" && doc.frontmatter.created.trim()) {
+      entry.created = doc.frontmatter.created;
+    }
+    if (typeof doc.frontmatter.updated === "string" && doc.frontmatter.updated.trim()) {
+      entry.updated = doc.frontmatter.updated;
+    }
+    pages[doc.id] = entry;
   }
+
+  // Raw source/trajectory fallback entries (registry-only compatibility)
+  addRawFallbacks(paths, pages, "sources", "source");
+  addRawFallbacks(paths, pages, "trajectories", "trajectory");
 
   return {
     version: "1.0",
@@ -139,30 +205,77 @@ export function buildRegistry(paths: VaultPaths): Registry {
   };
 }
 
-/** Build backlinks map from all wiki pages. */
-export function buildBacklinks(paths: VaultPaths, registry: Registry): Backlinks {
+function addRawFallbacks(
+  paths: VaultPaths,
+  pages: Record<string, RegistryEntry>,
+  dirName: "sources" | "trajectories",
+  type: string,
+): void {
+  const rawDir = dirName === "sources" ? paths.rawSources : paths.rawTrajectories;
+  if (!existsSync(rawDir)) return;
+
+  for (const entry of readdirSync(rawDir)) {
+    const manifestPath = join(rawDir, entry, "manifest.json");
+    if (!existsSync(manifestPath)) continue;
+
+    const manifest = readJson<Record<string, unknown>>(manifestPath, {});
+    const id = String(manifest.id || entry);
+    const pageKey = `${dirName}/${id}`;
+
+    // Don't overwrite a parsed document
+    if (pages[pageKey]) continue;
+
+    const captured = String(manifest.captured || "");
+    pages[pageKey] = {
+      type,
+      title: String(manifest.title || id),
+      ...(captured ? { created: captured, updated: captured } : {}),
+      ...manifest,
+    };
+  }
+}
+
+function getSemanticTitle(doc: KnowledgeDocument): string {
+  if (typeof doc.frontmatter.title === "string" && doc.frontmatter.title.trim()) {
+    return doc.frontmatter.title.trim();
+  }
+  return doc.id.split("/").pop() || "Untitled";
+}
+
+/** Build backlinks from discovered documents using shared link resolution. */
+function buildBacklinks(
+  documents: KnowledgeDocument[],
+  knownIds: Set<string>,
+  diagnostics: KnowledgeDiagnostic[],
+): Backlinks {
   const inbound: Backlinks = {};
 
-  // Initialize all pages with empty arrays
-  for (const id of Object.keys(registry.pages)) {
-    inbound[id] = [];
+  // Initialize parsed concept IDs with empty arrays
+  for (const doc of documents) {
+    inbound[doc.id] = [];
   }
 
-  // Count inbound links
-  for (const page of findWikiPages(paths.wiki)) {
-    const links = extractWikilinks(page.content);
-    for (const link of links) {
-      if (inbound[link] && !inbound[link].includes(page.relative)) {
-        inbound[link].push(page.relative);
+  // Resolve links for each document
+  for (const doc of documents) {
+    const result = buildResolvedBacklinks(doc.id, doc.body, knownIds);
+    diagnostics.push(...result.diagnostics);
+    for (const target of result.targets) {
+      if (inbound[target] && !inbound[target].includes(doc.id)) {
+        inbound[target].push(doc.id);
       }
     }
+  }
+
+  // Sort targets for determinism
+  for (const [id, targets] of Object.entries(inbound)) {
+    inbound[id] = [...targets].sort(compareCodePoint);
   }
 
   return inbound;
 }
 
-/** Build index markdown from registry. */
-export function buildIndexMarkdown(registry: Registry): string {
+/** Build meta/index.md in existing rich format. */
+function buildIndexMarkdown(registry: Registry): string {
   const byType: Record<string, Array<{ id: string; entry: RegistryEntry }>> = {};
 
   for (const [id, entry] of Object.entries(registry.pages)) {
@@ -180,7 +293,7 @@ export function buildIndexMarkdown(registry: Registry): string {
     const label = `${type.charAt(0).toUpperCase() + type.slice(1)}s`;
     sections.push(`## ${label}\n`);
     for (const { id, entry } of items.sort((a, b) => a.id.localeCompare(b.id))) {
-      sections.push(`- [[${id}]] — ${entry.title} *(created: ${entry.created})*`);
+      sections.push(`- [[${id}]] — ${entry.title} *(created: ${entry.created || "unknown"})*`);
     }
     sections.push("");
   }
@@ -191,13 +304,13 @@ export function buildIndexMarkdown(registry: Registry): string {
   return `${sections.join("\n")}\n`;
 }
 
-/** Build log markdown from events.jsonl. */
-export function buildLogMarkdown(paths: VaultPaths): string {
+/** Build meta/log.md in existing rich format. */
+function buildLogMarkdown(paths: VaultPaths): string {
   const eventsPath = join(paths.meta, "events.jsonl");
   const events: WikiEvent[] = [];
 
   if (existsSync(eventsPath)) {
-    const raw = readFileSync(eventsPath, "utf-8").trim();
+    const raw = readText(eventsPath).trim();
     for (const line of raw.split("\n")) {
       if (!line.trim()) continue;
       try {
@@ -239,18 +352,66 @@ export function appendEvent(paths: VaultPaths, event: Omit<WikiEvent, "timestamp
   writeFileSync(eventsPath, `${line}\n`, { flag: "a", encoding: "utf-8" });
 }
 
-/** Quick lightweight metadata rebuild (backlinks + index + log only). */
-export function rebuildMetadataLight(paths: VaultPaths): void {
-  const registry = buildRegistry(paths);
-  const backlinks = buildBacklinks(paths, registry);
-  writeJson(join(paths.meta, "registry.json"), registry);
-  writeJson(join(paths.meta, "backlinks.json"), backlinks);
-  writeFileSync(join(paths.meta, "index.md"), buildIndexMarkdown(registry), "utf-8");
-
-  const log = buildLogMarkdown(paths);
-  writeFileSync(join(paths.meta, "log.md"), log, "utf-8");
+/** Atomic write: temp file + rename. */
+function atomicWriteFile(path: string, content: string): void {
+  mkdirSync(dirname(path), { recursive: true });
+  const temporary = `${path}.tmp-${process.pid}-${randomUUID()}`;
+  writeFileSync(temporary, content, "utf8");
+  renameSync(temporary, path);
 }
 
+/** Read text file or return empty string. */
+function readText(path: string): string {
+  try {
+    if (!existsSync(path)) return "";
+    return readFileSync(path, "utf8");
+  } catch {
+    return "";
+  }
+}
+
+/** Prune obsolete generated indexes in OKF mode. */
+function pruneObsoleteIndexes(paths: VaultPaths, currentIndexes: Map<string, string>): void {
+  const currentPaths = new Set(currentIndexes.keys());
+
+  function walkDir(dir: string, relative: string): string[] {
+    const results: string[] = [];
+    if (!existsSync(dir)) return results;
+    for (const entry of readdirSync(dir)) {
+      const fullPath = join(dir, entry);
+      const relPath = relative ? `${relative}/${entry}` : entry;
+      if (entry.toLowerCase() === "index.md") {
+        results.push(relPath);
+      } else if (statSync(fullPath).isDirectory()) {
+        results.push(...walkDir(fullPath, relPath));
+      }
+    }
+    return results;
+  }
+
+  const allIndexes = walkDir(paths.wiki, "");
+  for (const indexPath of allIndexes) {
+    // Never prune root index.md
+    if (indexPath === "index.md") continue;
+    if (!currentPaths.has(indexPath)) {
+      const fullPath = join(paths.wiki, indexPath);
+      try {
+        rmSync(fullPath);
+        // Try to remove parent dir if empty
+        const parentDir = dirname(fullPath);
+        if (existsSync(parentDir) && readdirSync(parentDir).length === 0) {
+          rmSync(parentDir);
+        }
+      } catch {
+        // Ignore errors during pruning
+      }
+    }
+  }
+}
+
+function statSync(path: string) {
+  return require("node:fs").statSync(path);
+}
 
 // ===== OKF Projection Renderers =====
 
@@ -279,14 +440,14 @@ export function buildDirectoryIndexes(
 
   for (const doc of documents) {
     const parts = doc.id.split("/");
-    
+
     // Walk the path, tracking parent-child directory relationships
     for (let i = 0; i < parts.length; i++) {
       const parentPath = i === 0 ? "" : parts.slice(0, i).join("/");
       if (!directories.has(parentPath)) {
         directories.set(parentPath, { dirs: new Set(), concepts: [] });
       }
-      
+
       if (i === parts.length - 1) {
         // Last part is the concept file
         directories.get(parentPath)!.concepts.push(doc);
@@ -298,7 +459,8 @@ export function buildDirectoryIndexes(
   }
 
   // Always emit root index
-  const vaultName = (typeof config.name === "string" && config.name.trim()) ? config.name.trim() : "Wiki";
+  const vaultName =
+    typeof config.name === "string" && config.name.trim() ? config.name.trim() : "Wiki";
   if (!directories.has("")) {
     directories.set("", { dirs: new Set(), concepts: [] });
   }
@@ -309,9 +471,9 @@ export function buildDirectoryIndexes(
     const lines: string[] = [];
 
     if (dirPath === "") {
-      lines.push('---');
+      lines.push("---");
       lines.push('okf_version: "0.2"');
-      lines.push('---');
+      lines.push("---");
       lines.push("");
       lines.push(`# ${escapeLabel(vaultName)}`);
     } else {
@@ -325,7 +487,7 @@ export function buildDirectoryIndexes(
       lines.push("## Directories");
       lines.push("");
       for (const subDir of [...dirs].sort(compareCodePoint)) {
-        const encoded = encodeRelativePath(subDir) + "/";
+        const encoded = `${encodeRelativePath(subDir)}/`;
         lines.push(`- [${escapeLabel(subDir)}/](${encoded})`);
       }
     }
@@ -342,17 +504,18 @@ export function buildDirectoryIndexes(
       });
       for (const doc of sorted) {
         const relId = dirPath ? doc.id.slice(dirPath.length + 1) : doc.id;
-        const title = (typeof doc.frontmatter.title === "string" && doc.frontmatter.title.trim())
-          ? doc.frontmatter.title.trim()
-          : relId.split("/").pop()!;
+        const title =
+          typeof doc.frontmatter.title === "string" && doc.frontmatter.title.trim()
+            ? doc.frontmatter.title.trim()
+            : relId.split("/").pop()!;
         const desc = compactDescription(doc.frontmatter.description);
-        const encoded = encodeRelativePath(relId + ".md");
+        const encoded = encodeRelativePath(`${relId}.md`);
         const descPart = desc ? ` — ${desc}` : "";
         lines.push(`- [${escapeLabel(title)}](${encoded})${descPart}`);
       }
     }
 
-    indexes.set(indexPath, lines.join("\n") + "\n");
+    indexes.set(indexPath, `${lines.join("\n")}\n`);
   }
 
   return indexes;
@@ -403,19 +566,25 @@ export function buildOkfLog(eventsJsonl: string, path = "meta/events.jsonl"): Ok
     try {
       parsed = JSON.parse(line);
     } catch {
-      diagnostics.push(okfDiag("warning", "event_invalid_json", path, `Invalid JSON at line ${i + 1}`));
+      diagnostics.push(
+        okfDiag("warning", "event_invalid_json", path, `Invalid JSON at line ${i + 1}`),
+      );
       continue;
     }
 
     const rawTs = parsed.timestamp;
-    if (typeof rawTs !== "string" || isNaN(Date.parse(rawTs))) {
-      diagnostics.push(okfDiag("warning", "event_invalid_timestamp", path, `Invalid timestamp at line ${i + 1}`));
+    if (typeof rawTs !== "string" || Number.isNaN(Date.parse(rawTs))) {
+      diagnostics.push(
+        okfDiag("warning", "event_invalid_timestamp", path, `Invalid timestamp at line ${i + 1}`),
+      );
       continue;
     }
 
     const rawKind = parsed.kind;
     if (typeof rawKind !== "string" || !rawKind.trim()) {
-      diagnostics.push(okfDiag("warning", "event_missing_kind", path, `Missing kind at line ${i + 1}`));
+      diagnostics.push(
+        okfDiag("warning", "event_missing_kind", path, `Missing kind at line ${i + 1}`),
+      );
       continue;
     }
 
@@ -423,11 +592,13 @@ export function buildOkfLog(eventsJsonl: string, path = "meta/events.jsonl"): Ok
     const date = ts.toISOString().split("T")[0];
     const kind = rawKind.trim();
 
-    const detailEntries: [string, unknown][] = Object.entries(parsed)
-      .filter(([k]) => k !== "timestamp" && k !== "kind");
-    const details = detailEntries.length > 0
-      ? JSON.stringify(canonicalJsonValue(Object.fromEntries(detailEntries)))
-      : "";
+    const detailEntries: [string, unknown][] = Object.entries(parsed).filter(
+      ([k]) => k !== "timestamp" && k !== "kind",
+    );
+    const details =
+      detailEntries.length > 0
+        ? JSON.stringify(canonicalJsonValue(Object.fromEntries(detailEntries)))
+        : "";
 
     events.push({ seq: i, timestamp: rawTs, date, kind, details });
   }
@@ -473,7 +644,7 @@ export function buildOkfLog(eventsJsonl: string, path = "meta/events.jsonl"): Ok
   }
 
   return {
-    markdown: outLines.join("\n") + "\n",
+    markdown: `${outLines.join("\n")}\n`,
     diagnostics,
   };
 }

@@ -1,13 +1,7 @@
+import type { Definition, Link, LinkReference, Nodes, Root } from "mdast";
 import { fromMarkdown } from "mdast-util-from-markdown";
-import type {
-  Link,
-  LinkReference,
-  Definition,
-  Root,
-  Nodes,
-} from "mdast";
-import { compareCodePoint } from "./vault-format.js";
 import type { KnowledgeDiagnostic } from "./knowledge-document.js";
+import { compareCodePoint } from "./vault-format.js";
 
 export interface ExtractedLink {
   target: string;
@@ -116,11 +110,10 @@ export function extractLegacyWikilinks(body: string): ExtractedLink[] {
   return links;
 }
 
-function resolveMarkdownTarget(target: string, sourceId: string):
-  | { kind: "concept"; id: string }
-  | { kind: "escape" }
-  | { kind: "external" }
-  | { kind: "empty" } {
+function resolveMarkdownTarget(
+  target: string,
+  sourceId: string,
+): { kind: "concept"; id: string } | { kind: "escape" } | { kind: "external" } | { kind: "empty" } {
   // Strip query and fragment (earliest delimiter)
   const qIndex = target.indexOf("?");
   const fIndex = target.indexOf("#");
@@ -173,7 +166,6 @@ function resolveMarkdownTarget(target: string, sourceId: string):
 
   for (const part of parts) {
     if (part === "" || part === ".") {
-      continue;
     } else if (part === "..") {
       if (allParts.length === 0) {
         return { kind: "escape" };
@@ -194,9 +186,9 @@ function resolveMarkdownTarget(target: string, sourceId: string):
   return { kind: "empty" };
 }
 
-function resolveWikilinkTarget(target: string):
-  | { kind: "concept"; id: string }
-  | { kind: "empty" } {
+function resolveWikilinkTarget(
+  target: string,
+): { kind: "concept"; id: string } | { kind: "empty" } {
   // Wikilinks are already bundle-relative concept IDs
   const cleaned = target.trim();
   if (!cleaned) return { kind: "empty" };
@@ -217,7 +209,12 @@ export function buildResolvedBacklinks(
     const resolved = resolveMarkdownTarget(link.target, sourceId);
     if (resolved.kind === "escape") {
       diagnostics.push(
-        diag("warning", "link_path_escape", `${sourceId}.md`, `Link escapes bundle root: ${link.target}`),
+        diag(
+          "warning",
+          "link_path_escape",
+          `${sourceId}.md`,
+          `Link escapes bundle root: ${link.target}`,
+        ),
       );
     } else if (resolved.kind === "concept") {
       const normalizedId = resolved.id.normalize("NFC");
@@ -241,7 +238,12 @@ export function buildResolvedBacklinks(
         targets.add(normalizedId);
       } else {
         diagnostics.push(
-          diag("warning", "link_unresolved", `${sourceId}.md`, `Unresolved wikilink: ${normalizedId}`),
+          diag(
+            "warning",
+            "link_unresolved",
+            `${sourceId}.md`,
+            `Unresolved wikilink: ${normalizedId}`,
+          ),
         );
       }
     }

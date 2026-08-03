@@ -109,6 +109,6 @@ describe("wiki retro", () => {
       id.startsWith("sources/meta-test"),
     );
     expect(sourcePageId).toBeTruthy();
-    expect(registry.pages[sourcePageId!].title).toBe('"Meta Test"');
+    expect(registry.pages[sourcePageId!].title).toBe("Meta Test");
   });
 });

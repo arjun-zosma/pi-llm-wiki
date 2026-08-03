@@ -18,7 +18,10 @@ function parsed(content: string, path = "concepts/test.md") {
 
 describe("KnowledgeDocument", () => {
   it("parses nested OKF values, timestamps as strings, and unknown mappings", () => {
-    const input = readFileSync(join(import.meta.dirname, "fixtures/okf/documents/nested.md"), "utf8");
+    const input = readFileSync(
+      join(import.meta.dirname, "fixtures/okf/documents/nested.md"),
+      "utf8",
+    );
     const doc = parsed(input, "analyses/revenue-total.md");
     expect(doc.id).toBe("analyses/revenue-total");
     expect(doc.frontmatter.generated).toEqual({
@@ -55,10 +58,7 @@ describe("KnowledgeDocument", () => {
     ["frontmatter_duplicate_key", "---\ntype: concept\ntype: entity\n---\n"],
     ["frontmatter_alias_forbidden", "---\ntype: concept\nx: &x [1]\ny: *x\n---\n"],
     ["frontmatter_custom_tag_forbidden", "---\ntype: concept\nx: !producer value\n---\n"],
-    [
-      "frontmatter_multiple_documents",
-      "---\ntype: concept\n...\n---\ntype: entity\n---\n",
-    ],
+    ["frontmatter_multiple_documents", "---\ntype: concept\n...\n---\ntype: entity\n---\n"],
   ])("returns %s without exposing a YAML exception", (code, input) => {
     const result = parseKnowledgeDocument(input, "concepts/bad.md");
     expect(result.ok).toBe(false);
@@ -70,9 +70,9 @@ describe("KnowledgeDocument", () => {
     expect(parseKnowledgeDocument("# Body\n", "concepts/a.md").diagnostics[0].code).toBe(
       "frontmatter_missing",
     );
-    expect(parseKnowledgeDocument("---\ntitle: A\n---\n", "concepts/a.md").diagnostics[0].code).toBe(
-      "concept_missing_type",
-    );
+    expect(
+      parseKnowledgeDocument("---\ntitle: A\n---\n", "concepts/a.md").diagnostics[0].code,
+    ).toBe("concept_missing_type");
     const large = `---\ntype: concept\nx: ${"a".repeat(FRONTMATTER_MAX_BYTES)}\n---\n`;
     expect(parseKnowledgeDocument(large, "concepts/a.md").diagnostics[0].code).toBe(
       "frontmatter_limit_bytes",
