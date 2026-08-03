@@ -10,7 +10,15 @@ import {
   extractUrlContent,
   fileExtractorFor,
 } from "./source-extractors.js";
-import { type VaultPaths, exec, fmtDate, nextSourceId, readText, writeJson } from "./utils.js";
+import {
+  type ExecApi,
+  type VaultPaths,
+  exec,
+  fmtDate,
+  nextSourceId,
+  readText,
+  writeJson,
+} from "./utils.js";
 
 /**
  * Source packet capture and management.
@@ -48,7 +56,7 @@ const URL_ORIGINAL_EXTENSIONS = new Set([".html", ".htm", ".md", ".pdf", ".txt",
 
 /** Capture a URL into a source packet. */
 export async function captureUrl(
-  pi: ExtensionAPI,
+  pi: ExecApi,
   paths: VaultPaths,
   url: string,
   signal?: AbortSignal,
@@ -58,7 +66,7 @@ export async function captureUrl(
 
 /** Capture a local file into a source packet. */
 export async function captureFile(
-  pi: ExtensionAPI,
+  pi: ExecApi,
   paths: VaultPaths,
   filePath: string,
   signal?: AbortSignal,
@@ -84,7 +92,7 @@ function captureSourceSync(paths: VaultPaths, source: CaptureSource): CaptureRes
   return finalizeCapture(paths, packet, source, content);
 }
 
-function urlCaptureSource(pi: ExtensionAPI, url: string, signal?: AbortSignal): CaptureSource {
+function urlCaptureSource(pi: ExecApi, url: string, signal?: AbortSignal): CaptureSource {
   return {
     needsOriginalDir: true,
     fallbackText: contentExtractionFailureMessage(url),
@@ -99,11 +107,7 @@ function urlCaptureSource(pi: ExtensionAPI, url: string, signal?: AbortSignal): 
   };
 }
 
-function fileCaptureSource(
-  pi: ExtensionAPI,
-  filePath: string,
-  signal?: AbortSignal,
-): CaptureSource {
+function fileCaptureSource(pi: ExecApi, filePath: string, signal?: AbortSignal): CaptureSource {
   const fileName = filePath.split("/").pop() || "unknown";
   const extractor = fileExtractorFor(filePath);
   const content = extractor.shouldReadText ? readText(filePath) : "";
@@ -204,7 +208,7 @@ function finalizeCapture(
 }
 
 async function preserveFileOriginal(
-  pi: ExtensionAPI,
+  pi: ExecApi,
   packetPath: string,
   filePath: string,
   fileName: string,
@@ -220,7 +224,7 @@ async function preserveFileOriginal(
 }
 
 async function preserveUrlOriginal(
-  pi: ExtensionAPI,
+  pi: ExecApi,
   packetPath: string,
   url: string,
   signal?: AbortSignal,

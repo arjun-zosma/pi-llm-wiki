@@ -1,7 +1,7 @@
 import { open } from "node:fs/promises";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { NodeHtmlMarkdown } from "node-html-markdown";
-import { exec } from "./utils.js";
+import { type ExecApi, exec } from "./utils.js";
 
 export type ExtractionStatus = "success" | "failed" | "unsupported";
 
@@ -23,7 +23,7 @@ export interface FileExtractor {
 }
 
 interface FileExtractArgs {
-  pi: ExtensionAPI;
+  pi: ExecApi;
   filePath: string;
   content: string;
   signal?: AbortSignal;
@@ -35,7 +35,7 @@ interface UrlExtractor {
 }
 
 interface UrlExtractArgs {
-  pi: ExtensionAPI;
+  pi: ExecApi;
   url: string;
   signal?: AbortSignal;
 }
@@ -161,7 +161,7 @@ export function fileExtractorFor(filePath: string): FileExtractor {
 }
 
 export function extractUrlContent(
-  pi: ExtensionAPI,
+  pi: ExecApi,
   url: string,
   signal?: AbortSignal,
 ): Promise<ExtractedContent> {
@@ -197,7 +197,7 @@ function hasAnyExtension(extensions: string[]): (path: string) => boolean {
   return (path) => extensions.some((extension) => hasExtension(extension)(path));
 }
 
-async function extractPdf(pi: ExtensionAPI, source: string, signal?: AbortSignal): Promise<string> {
+async function extractPdf(pi: ExecApi, source: string, signal?: AbortSignal): Promise<string> {
   const extracted = await extractWithMarkItDown(pi, source, signal);
   return extracted || pdfExtractionFailureMessage(source);
 }
@@ -206,17 +206,13 @@ export function docxExtractionFailureMessage(source: string): string {
   return `_DOCX content could not be converted to markdown from ${source}. Ensure uvx and markitdown are installed._\n`;
 }
 
-async function extractDocx(
-  pi: ExtensionAPI,
-  source: string,
-  signal?: AbortSignal,
-): Promise<string> {
+async function extractDocx(pi: ExecApi, source: string, signal?: AbortSignal): Promise<string> {
   const extracted = await extractWithMarkItDown(pi, source, signal);
   return extracted || docxExtractionFailureMessage(source);
 }
 
 async function extractPdfUrl(
-  pi: ExtensionAPI,
+  pi: ExecApi,
   url: string,
   signal?: AbortSignal,
 ): Promise<ExtractedContent> {
@@ -232,7 +228,7 @@ async function extractPdfUrl(
 }
 
 async function extractTextUrl(
-  pi: ExtensionAPI,
+  pi: ExecApi,
   url: string,
   signal?: AbortSignal,
 ): Promise<ExtractedContent> {
@@ -266,7 +262,7 @@ async function extractTextUrl(
 }
 
 async function extractWithMarkItDown(
-  pi: ExtensionAPI,
+  pi: ExecApi,
   source: string,
   signal?: AbortSignal,
 ): Promise<string> {
@@ -285,7 +281,7 @@ async function extractWithMarkItDown(
   }
 }
 
-async function hasMarkItDown(pi: ExtensionAPI, signal?: AbortSignal): Promise<boolean> {
+async function hasMarkItDown(pi: ExecApi, signal?: AbortSignal): Promise<boolean> {
   const markitdown = await exec(
     pi,
     "sh",
@@ -295,7 +291,7 @@ async function hasMarkItDown(pi: ExtensionAPI, signal?: AbortSignal): Promise<bo
   return markitdown.stdout.trim() === "yes";
 }
 
-async function fetchTextUrl(pi: ExtensionAPI, url: string, signal?: AbortSignal): Promise<string> {
+async function fetchTextUrl(pi: ExecApi, url: string, signal?: AbortSignal): Promise<string> {
   try {
     const curlResult = await exec(
       pi,

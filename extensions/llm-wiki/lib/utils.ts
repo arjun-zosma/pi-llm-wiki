@@ -386,9 +386,12 @@ export function fmtDate(d = new Date()): string {
   return d.toISOString().split("T")[0];
 }
 
+/** Narrow exec-only interface shared by Pi and MCP. */
+export type ExecApi = Pick<ExtensionAPI, "exec">;
+
 /** Run a shell command via pi.exec. */
 export async function exec(
-  pi: ExtensionAPI,
+  pi: ExecApi,
   command: string,
   args: string[],
   options?: { signal?: AbortSignal; timeout?: number; cwd?: string },
