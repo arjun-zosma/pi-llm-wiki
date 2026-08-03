@@ -6,6 +6,7 @@ import { Type } from "typebox";
 import type { Static } from "typebox";
 import {
   type KnowledgeDiagnostic,
+  type KnowledgeDocument,
   createKnowledgeDocument,
   parseKnowledgeDocument,
   patchKnowledgeDocument,
@@ -15,6 +16,7 @@ import {
 import { appendEvent, rebuildMetadataLight } from "./metadata.js";
 import { runSubAgent } from "./subagent.js";
 import { type VaultPaths, fmtDate, slugify } from "./utils.js";
+import { assertWritableVault, VaultWriteError } from "./vault-format.js";
 
 /**
  * Background ingest synthesis (issue #65, part of epic #63).
@@ -232,6 +234,15 @@ export function commitSynthesis(
     contradictions: data.contradictions?.length ?? 0,
   };
 
+  try {
+    assertWritableVault(paths);
+  } catch (error: unknown) {
+    if (error instanceof VaultWriteError) {
+      return { ok: false, sourceId, diagnostics: error.diagnostics };
+    }
+    throw error;
+  }
+
   // Source page: if existing skeleton is malformed, fail before creating entity/concept pages.
   if (existsSync(result.sourcePage)) {
     const existingContent = readFileSync(result.sourcePage, "utf-8");
@@ -241,23 +252,36 @@ export function commitSynthesis(
     }
   }
 
-  // Source page (always rewritten from skeleton → ingested).
+  // Patch existing documents so unknown fields, legacy sources, and titles survive.
+  let sourceDocument: KnowledgeDocument;
+  if (existsSync(result.sourcePage)) {
+    const parsed = parseKnowledgeDocument(
+      readFileSync(result.sourcePage, "utf8"),
+      `sources/${sourceId}.md`,
+    );
+    if (!parsed.ok) return { ok: false, sourceId, diagnostics: parsed.diagnostics };
+    sourceDocument = patchKnowledgeDocument(parsed.document, {
+      fields: { status: "ingested", updated: date },
+      body: buildIngestedSourcePageBody(manifest, data, date),
+    });
+  } else {
+    sourceDocument = createKnowledgeDocument(
+      `sources/${sourceId}.md`,
+      {
+        type: "source",
+        title: String(manifest.title || sourceId),
+        format: String(manifest.format || "unknown"),
+        source_id: sourceId,
+        raw_path: `raw/sources/${sourceId}/extracted.md`,
+        captured: String(manifest.captured || date),
+        status: "ingested",
+        updated: date,
+      },
+      buildIngestedSourcePageBody(manifest, data, date),
+    );
+  }
   mkdirSync(join(paths.wiki, "sources"), { recursive: true });
-  const ingestedDoc = createKnowledgeDocument(
-    `sources/${sourceId}.md`,
-    {
-      type: "source",
-      title: String(manifest.title || sourceId),
-      format: String(manifest.format || "unknown"),
-      source_id: sourceId,
-      raw_path: `raw/sources/${sourceId}/extracted.md`,
-      captured: String(manifest.captured || date),
-      status: "ingested",
-      updated: date,
-    },
-    buildIngestedSourcePageBody(manifest, data, date),
-  );
-  writeKnowledgeDocumentFile(result.sourcePage, ingestedDoc);
+  writeKnowledgeDocumentFile(result.sourcePage, sourceDocument);
 
   // Entity pages — create if absent, link if present.
   mkdirSync(join(paths.wiki, "entities"), { recursive: true });

@@ -192,11 +192,14 @@ export function registerWikiCaptureSource(pi: ExtensionAPI, runtime?: Runtime): 
     }),
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       const paths = getPaths(ctx.cwd);
-      const vaultCheck = requireVault(paths);
+      const vaultCheck = inspectWritableVault(paths);
       if (!vaultCheck.ok) {
         return {
-          content: [{ type: "text", text: vaultCheck.reason }],
-          details: { error: vaultCheck.reason } as Record<string, unknown>,
+          content: [{ type: "text", text: `Wiki vault error: ${vaultCheck.diagnostics[0].message}` }],
+          details: {
+            error: vaultCheck.diagnostics[0].code,
+            diagnostics: vaultCheck.diagnostics,
+          } as Record<string, unknown>,
           isError: true,
         };
       }
@@ -291,11 +294,14 @@ export function registerWikiIngest(pi: ExtensionAPI, runtime?: Runtime): void {
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const paths = getPaths(ctx.cwd);
-      const vaultCheck = requireVault(paths);
+      const vaultCheck = inspectWritableVault(paths);
       if (!vaultCheck.ok) {
         return {
-          content: [{ type: "text", text: vaultCheck.reason }],
-          details: { error: vaultCheck.reason } as Record<string, unknown>,
+          content: [{ type: "text", text: `Wiki vault error: ${vaultCheck.diagnostics[0].message}` }],
+          details: {
+            error: vaultCheck.diagnostics[0].code,
+            diagnostics: vaultCheck.diagnostics,
+          } as Record<string, unknown>,
           isError: true,
         };
       }

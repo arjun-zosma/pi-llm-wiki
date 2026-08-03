@@ -3,6 +3,7 @@ import { extname, join } from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { createKnowledgeDocument, serializeKnowledgeDocument } from "./knowledge-document.js";
 import { appendEvent } from "./metadata.js";
+import { assertWritableVault } from "./vault-format.js";
 import {
   type ExtractedContent,
   binaryExtractionFailureMessage,
@@ -80,6 +81,7 @@ export function captureText(paths: VaultPaths, text: string, title?: string): Ca
 }
 
 async function captureSource(paths: VaultPaths, source: CaptureSource): Promise<CaptureResult> {
+  assertWritableVault(paths);
   const packet = createSourcePacket(paths, source.needsOriginalDir);
   await source.preserveOriginal?.(packet.packetPath);
   const content = await source.extract();
@@ -87,6 +89,7 @@ async function captureSource(paths: VaultPaths, source: CaptureSource): Promise<
 }
 
 function captureSourceSync(paths: VaultPaths, source: CaptureSource): CaptureResult {
+  assertWritableVault(paths);
   const packet = createSourcePacket(paths, source.needsOriginalDir);
   const content = source.extract() as ExtractedContent;
   return finalizeCapture(paths, packet, source, content);
@@ -176,6 +179,7 @@ function finalizeCapture(
   source: CaptureSource,
   content: ExtractedContent,
 ): CaptureResult {
+  assertWritableVault(paths);
   const extracted = content.extracted || source.fallbackText;
   const manifest = {
     id: packet.sourceId,

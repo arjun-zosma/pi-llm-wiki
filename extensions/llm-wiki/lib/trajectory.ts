@@ -3,6 +3,7 @@ import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Type } from "typebox";
 import { appendEvent, rebuildMetadataLight } from "./metadata.js";
+import { assertWritableVault, inspectWritableVault } from "./vault-format.js";
 import { searchWikiLayered } from "./recall.js";
 import {
   type VaultPaths,
@@ -230,6 +231,7 @@ export function captureTrajectory(
   paths: VaultPaths,
   input: CaptureTrajectoryInput,
 ): CaptureTrajectoryResult {
+  assertWritableVault(paths);
   const trajectoryId = nextTrajectoryId(paths);
   const packetPath = join(paths.rawTrajectories, trajectoryId);
   mkdirSync(packetPath, { recursive: true });
@@ -356,7 +358,17 @@ export function registerWikiCaptureTrajectory(pi: ExtensionAPI): void {
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx: ExtensionContext) {
       const paths = resolveVaultPaths(ctx.cwd ?? process.cwd());
-      if (!existsSync(join(paths.dotWiki, "config.json"))) return vaultMissing();
+      const vaultCheck = inspectWritableVault(paths);
+      if (!vaultCheck.ok) {
+        return {
+          content: [{ type: "text", text: `Wiki vault error: ${vaultCheck.diagnostics[0].message}` }],
+          details: {
+            error: vaultCheck.diagnostics[0].code,
+            diagnostics: vaultCheck.diagnostics,
+          } as Record<string, unknown>,
+          isError: true,
+        };
+      }
 
       let steps = params.steps as TrajectoryStep[] | undefined;
       let model = params.model;

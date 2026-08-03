@@ -11,7 +11,7 @@ import {
 import { appendEvent, rebuildMetadataLight } from "./metadata.js";
 import type { Runtime } from "./runtime.js";
 import { type VaultPaths, fmtDate, resolveVaultPaths } from "./utils.js";
-import { inspectWritableVault } from "./vault-format.js";
+import { assertWritableVault, inspectWritableVault } from "./vault-format.js";
 
 // ─── Types ─────────────────────────────────────────────
 
@@ -57,6 +57,7 @@ export function saveObservation(
   input: ObservationInput,
   opts?: { rebuild?: boolean },
 ): ObservationResult {
+  assertWritableVault(paths);
   const today = fmtDate();
   const timestamp = new Date().toISOString();
 

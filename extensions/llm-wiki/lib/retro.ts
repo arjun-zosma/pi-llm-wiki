@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "typebox";
 import { scheduleReindex } from "./indexing.js";
@@ -11,7 +11,7 @@ import {
 import { appendEvent, rebuildMetadataLight } from "./metadata.js";
 import type { Runtime } from "./runtime.js";
 import { type VaultPaths, fmtDate, resolveVaultPaths } from "./utils.js";
-import { inspectWritableVault } from "./vault-format.js";
+import { assertWritableVault, inspectWritableVault } from "./vault-format.js";
 
 // ─── Public API ────────────────────────────────────────
 
@@ -30,6 +30,16 @@ export interface RetroResult {
  * The 4-layer pipeline (raw → source pages → canonical pages → metadata)
  * is still available via wiki_capture_source → wiki_ingest for deep research.
  */
+function insightPath(paths: VaultPaths, slug: string): string {
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug) || slug === "index" || slug === "log") {
+    throw new Error(`Invalid insight slug: ${slug}`);
+  }
+  const directory = resolve(paths.wiki, "sources");
+  const target = resolve(directory, `${slug}.md`);
+  if (dirname(target) !== directory) throw new Error(`Invalid insight slug: ${slug}`);
+  return target;
+}
+
 export function saveInsight(
   paths: VaultPaths,
   slug: string,
@@ -38,9 +48,10 @@ export function saveInsight(
   category?: string,
   opts?: { rebuild?: boolean },
 ): RetroResult {
+  assertWritableVault(paths);
   const today = fmtDate();
 
-  const sourcePagePath = join(paths.wiki, "sources", `${slug}.md`);
+  const sourcePagePath = insightPath(paths, slug);
 
   const pageBody = `# ${title}
 
@@ -144,9 +155,21 @@ export function registerWikiRetro(pi: ExtensionAPI, runtime?: Runtime): void {
         };
       }
 
-      const result = saveInsight(paths, params.slug, params.title, params.body, params.category, {
-        rebuild: !runtime,
-      });
+      let result: RetroResult;
+      try {
+        result = saveInsight(paths, params.slug, params.title, params.body, params.category, {
+          rebuild: !runtime,
+        });
+      } catch (error: unknown) {
+        if ((error as Error).message.startsWith("Invalid insight slug:")) {
+          return {
+            content: [{ type: "text", text: (error as Error).message }],
+            details: { error: "invalid_insight_slug" } as Record<string, unknown>,
+            isError: true,
+          };
+        }
+        throw error;
+      }
       if (runtime) {
         scheduleReindex(runtime, { hasUI: ctx.hasUI, ui: ctx.ui }, paths);
       }

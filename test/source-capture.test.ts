@@ -24,6 +24,7 @@ describe("source packet capture", () => {
   function makePaths() {
     const p = getVaultPaths(join(tmpDir, `wiki-${Math.random().toString(36).slice(2)}`));
     ensureVaultStructure(p);
+    writeFileSync(join(p.dotWiki, "config.json"), JSON.stringify({ name: "Capture test" }));
     return p;
   }
 

@@ -11,8 +11,11 @@ import { searchWiki } from "../extensions/llm-wiki/lib/recall.js";
 import { saveInsight } from "../extensions/llm-wiki/lib/retro.js";
 import { captureFile, captureText, captureUrl } from "../extensions/llm-wiki/lib/source-packet.js";
 import type { VaultPaths } from "../extensions/llm-wiki/lib/utils.js";
-import { inspectVaultFormat } from "../extensions/llm-wiki/lib/vault-format.js";
-import { inspectWritableVault } from "../extensions/llm-wiki/lib/vault-format.js";
+import {
+  VaultWriteError,
+  inspectVaultFormat,
+  inspectWritableVault,
+} from "../extensions/llm-wiki/lib/vault-format.js";
 import { searchRegistry } from "../extensions/llm-wiki/lib/wiki-service.js";
 
 /** Shared recall operation: calls searchWiki and appends vault diagnostics. */
@@ -88,8 +91,24 @@ export async function retroOperation(
       diagnostics: vaultCheck.diagnostics.map((d) => ({ code: d.code, message: d.message })),
     };
   }
-  const result = saveInsight(paths, slug, title, body, category, { rebuild: false });
-  return { ok: true, slug: result.slug, sourcePagePath: result.sourcePagePath };
+  try {
+    const result = saveInsight(paths, slug, title, body, category, { rebuild: false });
+    return { ok: true, slug: result.slug, sourcePagePath: result.sourcePagePath };
+  } catch (error: unknown) {
+    if (error instanceof VaultWriteError) {
+      return {
+        ok: false,
+        diagnostics: error.diagnostics.map((d) => ({ code: d.code, message: d.message })),
+      };
+    }
+    if ((error as Error).message.startsWith("Invalid insight slug:")) {
+      return {
+        ok: false,
+        diagnostics: [{ code: "invalid_insight_slug", message: (error as Error).message }],
+      };
+    }
+    throw error;
+  }
 }
 
 /** Shared capture operation: validates vault then delegates to capture functions. */

@@ -1,6 +1,9 @@
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { registerWikiRetro, saveInsight } from "../extensions/llm-wiki/lib/retro.js";
+import { retroOperation } from "../mcp/operations.js";
 import { ensureVaultStructure, getVaultPaths } from "../extensions/llm-wiki/lib/utils.js";
 import { readFile } from "./helpers.js";
 
@@ -46,6 +49,45 @@ describe("wiki retro", () => {
     try {
       rmSync(tmpDir, { recursive: true, force: true });
     } catch {}
+  });
+
+  it.each(["../../../outside", "../../meta/pwn", "with/slash", ".", "Index", "LOG"])(
+    "rejects unsafe slug %s without writing",
+    (slug) => {
+      const paths = getVaultPaths(wikiDir);
+      expect(() => saveInsight(paths, slug, "Title", "Body")).toThrow("Invalid insight slug");
+      expect(existsSync(join(paths.root, "outside.md"))).toBe(false);
+      expect(existsSync(join(paths.meta, "pwn.md"))).toBe(false);
+    },
+  );
+
+  it("maps unsafe retro slugs to structured Pi and MCP errors", async () => {
+    const paths = getVaultPaths(wikiDir);
+    let tool: { execute: (...args: any[]) => Promise<any> } | undefined;
+    registerWikiRetro({
+      registerTool: (definition: unknown) => {
+        tool = definition as { execute: (...args: any[]) => Promise<any> };
+      },
+    } as unknown as ExtensionAPI);
+    if (!tool) throw new Error("wiki_retro was not registered");
+
+    const piResult = await tool.execute(
+      "test",
+      { slug: "../../escape", title: "Title", body: "Body" },
+      undefined,
+      undefined,
+      { cwd: paths.root, hasUI: false },
+    );
+    expect(piResult.isError).toBe(true);
+    expect(piResult.details.error).toBe("invalid_insight_slug");
+
+    const mcpResult = await retroOperation(paths, "../../escape", "Title", "Body");
+    expect(mcpResult).toEqual({
+      ok: false,
+      diagnostics: [{ code: "invalid_insight_slug", message: "Invalid insight slug: ../../escape" }],
+    });
+    expect(existsSync(join(paths.root, "escape.md"))).toBe(false);
+    expect(existsSync(join(paths.meta, "events.jsonl"))).toBe(false);
   });
 
   it("should save an insight as a single lightweight markdown file", async () => {

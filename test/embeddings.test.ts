@@ -104,6 +104,7 @@ describe("embedding store + staleness", () => {
     );
     paths = getVaultPaths(join(tmpDir, "vault"));
     ensureVaultStructure(paths);
+    writeFileSync(join(paths.dotWiki, "config.json"), JSON.stringify({ name: "Embedding test" }));
   });
   afterEach(() => rmSync(tmpDir, { recursive: true, force: true }));
 
@@ -203,6 +204,7 @@ describe("reindexEmbeddings (backfill)", () => {
     );
     paths = getVaultPaths(join(tmpDir, "vault"));
     ensureVaultStructure(paths);
+    writeFileSync(join(paths.dotWiki, "config.json"), JSON.stringify({ name: "Reindex test" }));
   });
   afterEach(() => rmSync(tmpDir, { recursive: true, force: true }));
 

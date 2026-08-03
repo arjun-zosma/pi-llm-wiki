@@ -7,7 +7,7 @@
  * Also tests htmlToMarkdown directly for unit-level coverage of each rule.
  */
 
-import { mkdirSync, rmSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { htmlToMarkdown } from "../extensions/llm-wiki/lib/source-extractors.js";
@@ -40,6 +40,7 @@ describe("HTML normalization (issue #55)", () => {
   function makePaths() {
     const p = getVaultPaths(join(tmpDir, `wiki-${Math.random().toString(36).slice(2)}`));
     ensureVaultStructure(p);
+    writeFileSync(join(p.dotWiki, "config.json"), JSON.stringify({ name: "HTML test" }));
     return p;
   }
 

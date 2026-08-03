@@ -20,6 +20,7 @@ import { readJson, writeJson } from "./utils.js";
 import {
   compareCodePoint,
   discoverKnowledgeDocuments,
+  assertWritableVault,
   inspectVaultFormat,
 } from "./vault-format.js";
 
@@ -346,6 +347,7 @@ function buildLogMarkdown(paths: VaultPaths): string {
 
 /** Append an event to events.jsonl. */
 export function appendEvent(paths: VaultPaths, event: Omit<WikiEvent, "timestamp">): void {
+  assertWritableVault(paths);
   mkdirSync(paths.meta, { recursive: true });
   const eventsPath = join(paths.meta, "events.jsonl");
   const line = JSON.stringify({ timestamp: new Date().toISOString(), ...event });

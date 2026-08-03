@@ -26,6 +26,13 @@ export interface DiscoveryResult {
   blocking: boolean;
 }
 
+export class VaultWriteError extends Error {
+  constructor(readonly diagnostics: KnowledgeDiagnostic[]) {
+    super(diagnostics[0]?.message ?? "Wiki vault is not writable");
+    this.name = "VaultWriteError";
+  }
+}
+
 const RESERVED_NAMES = new Set(["index", "log"]);
 
 export function compareCodePoint(a: string, b: string): number {
@@ -251,6 +258,13 @@ export function inspectWritableVault(
     return { ok: false, diagnostics: state.diagnostics };
   }
   return { ok: true, format: state.knowledgeFormat };
+}
+
+/** Assert that an authoritative writer may mutate this vault. */
+export function assertWritableVault(paths: VaultPaths): KnowledgeFormat {
+  const result = inspectWritableVault(paths);
+  if (!result.ok) throw new VaultWriteError(result.diagnostics);
+  return result.format;
 }
 
 /** Check if path is a generated OKF reserved file (mode-aware). */

@@ -8,6 +8,7 @@ import type { Registry } from "./metadata.js";
 import type { LaunchCtx, Runtime } from "./runtime.js";
 import type { TaskConfig } from "./task-config.js";
 import { type VaultPaths, readJson, writeJson } from "./utils.js";
+import { assertWritableVault } from "./vault-format.js";
 
 /**
  * Background semantic embeddings, computed at write time (issue #66, epic #63).
@@ -167,6 +168,7 @@ export function readEmbeddingStore(paths: VaultPaths): EmbeddingStore {
 }
 
 export function writeEmbeddingStore(paths: VaultPaths, store: EmbeddingStore): void {
+  assertWritableVault(paths);
   writeJson(embeddingStorePath(paths), store);
 }
 
@@ -207,6 +209,7 @@ export async function embedPages(
   embedder: Embedder,
   opts: { force?: boolean } = {},
 ): Promise<EmbedStats> {
+  assertWritableVault(paths);
   const store = readEmbeddingStore(paths);
   const targets: PageText[] = [];
   let skipped = 0;
@@ -253,6 +256,7 @@ export async function reindexEmbeddings(
   embedder: Embedder,
   opts: { force?: boolean } = {},
 ): Promise<ReindexStats> {
+  assertWritableVault(paths);
   const registry = readJson<Registry>(join(paths.meta, "registry.json"), {
     version: "1.0",
     last_updated: "",

@@ -6,6 +6,7 @@ import {
   buildIngestedSourcePage,
   commitSynthesis,
 } from "../extensions/llm-wiki/lib/ingest-worker.js";
+import { parseKnowledgeDocument } from "../extensions/llm-wiki/lib/knowledge-document.js";
 import { ensureVaultStructure, getVaultPaths } from "../extensions/llm-wiki/lib/utils.js";
 
 const MANIFEST = {
@@ -73,6 +74,10 @@ describe("commitSynthesis", () => {
     wikiDir = join(tmpDir, "vault");
     mkdirSync(wikiDir, { recursive: true });
     ensureVaultStructure(getVaultPaths(wikiDir));
+    writeFileSync(
+      join(getVaultPaths(wikiDir).dotWiki, "config.json"),
+      JSON.stringify({ name: "Ingest test" }),
+    );
   });
   afterEach(() => rmSync(tmpDir, { recursive: true, force: true }));
 
@@ -115,6 +120,47 @@ describe("commitSynthesis", () => {
     expect(events).toContain('"kind":"ingest"');
     expect(events).toContain('"source_id":"SRC-001"');
     expect(events).toContain('"background":true');
+  });
+
+  it.each([
+    ["scalar", "sources: sources/SRC-legacy"],
+    ["list", "sources: [sources/SRC-a, sources/SRC-b]"],
+  ])("patches an existing %s-source page without migration or field loss", (_label, sources) => {
+    const paths = getVaultPaths(wikiDir);
+    const page = join(paths.wiki, "sources", "SRC-001.md");
+    mkdirSync(join(paths.wiki, "sources"), { recursive: true });
+    writeFileSync(
+      page,
+      [
+        "---",
+        "type: source",
+        "title: Original title",
+        sources,
+        "producer_data:",
+        "  nested:",
+        "    keep: true",
+        "status: skeleton",
+        "---",
+        "",
+        "Old body.",
+        "",
+      ].join("\n"),
+    );
+
+    const before = parseKnowledgeDocument(readFileSync(page, "utf8"), "sources/SRC-001.md");
+    expect(before.ok).toBe(true);
+    const result = commitSynthesis(paths, "SRC-001", MANIFEST, DATA, "2026-06-06");
+    expect(result.ok).toBe(true);
+    const after = parseKnowledgeDocument(readFileSync(page, "utf8"), "sources/SRC-001.md");
+    expect(after.ok).toBe(true);
+    if (!before.ok || !after.ok) return;
+    expect(after.document.sources).toEqual(before.document.sources);
+    expect(after.document.extensions.producer_data).toEqual(
+      before.document.extensions.producer_data,
+    );
+    expect(after.document.frontmatter.title).toBe("Original title");
+    expect(after.document.frontmatter.status).toBe("ingested");
+    expect(after.document.frontmatter.updated).toBe("2026-06-06");
   });
 
   it("skips entries with empty slugs without throwing", () => {
