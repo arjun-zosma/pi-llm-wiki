@@ -1,0 +1,5 @@
+{"timestamp":"2026-08-01T22:00:00.000Z","kind":"capture","z":1,"a":{"z":2,"a":1}}
+not json
+{"timestamp":"2026-08-02T10:00:00.000Z","kind":"retro","items":[2,1]}
+{"timestamp":"2026-08-02T10:00:00.000Z","kind":"observe"}
+{"timestamp":"bad","kind":"ignored"}

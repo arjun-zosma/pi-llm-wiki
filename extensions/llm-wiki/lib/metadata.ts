@@ -9,6 +9,8 @@ import {
   readJson,
   writeJson,
 } from "./utils.js";
+import type { KnowledgeDocument, KnowledgeDiagnostic } from "./knowledge-document.js";
+import { compareCodePoint } from "./vault-format.js";
 
 /**
  * Metadata generation for the LLM Wiki.
@@ -247,4 +249,231 @@ export function rebuildMetadataLight(paths: VaultPaths): void {
 
   const log = buildLogMarkdown(paths);
   writeFileSync(join(paths.meta, "log.md"), log, "utf-8");
+}
+
+
+// ===== OKF Projection Renderers =====
+
+function escapeLabel(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/\[/g, "\\[").replace(/\]/g, "\\]");
+}
+
+function encodeRelativePath(value: string): string {
+  return value.split("/").map(encodeURIComponent).join("/");
+}
+
+function compactDescription(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const compact = value.replace(/\s+/g, " ").trim();
+  return compact || undefined;
+}
+
+export function buildDirectoryIndexes(
+  documents: KnowledgeDocument[],
+  config: { name?: unknown },
+): Map<string, string> {
+  const indexes = new Map<string, string>();
+
+  // Build directory tree from concept documents only
+  const directories = new Map<string, { dirs: Set<string>; concepts: KnowledgeDocument[] }>();
+
+  for (const doc of documents) {
+    const parts = doc.id.split("/");
+    
+    // Walk the path, tracking parent-child directory relationships
+    for (let i = 0; i < parts.length; i++) {
+      const parentPath = i === 0 ? "" : parts.slice(0, i).join("/");
+      if (!directories.has(parentPath)) {
+        directories.set(parentPath, { dirs: new Set(), concepts: [] });
+      }
+      
+      if (i === parts.length - 1) {
+        // Last part is the concept file
+        directories.get(parentPath)!.concepts.push(doc);
+      } else {
+        // This is a subdirectory
+        directories.get(parentPath)!.dirs.add(parts[i]);
+      }
+    }
+  }
+
+  // Always emit root index
+  const vaultName = (typeof config.name === "string" && config.name.trim()) ? config.name.trim() : "Wiki";
+  if (!directories.has("")) {
+    directories.set("", { dirs: new Set(), concepts: [] });
+  }
+
+  // Render each index
+  for (const [dirPath, { dirs, concepts }] of directories) {
+    const indexPath = dirPath ? `${dirPath}/index.md` : "index.md";
+    const lines: string[] = [];
+
+    if (dirPath === "") {
+      lines.push('---');
+      lines.push('okf_version: "0.2"');
+      lines.push('---');
+      lines.push("");
+      lines.push(`# ${escapeLabel(vaultName)}`);
+    } else {
+      const dirName = dirPath.split("/").pop()!;
+      lines.push(`# ${escapeLabel(dirName)}`);
+    }
+
+    // List directories first
+    if (dirs.size > 0) {
+      lines.push("");
+      lines.push("## Directories");
+      lines.push("");
+      for (const subDir of [...dirs].sort(compareCodePoint)) {
+        const encoded = encodeRelativePath(subDir) + "/";
+        lines.push(`- [${escapeLabel(subDir)}/](${encoded})`);
+      }
+    }
+
+    // List concepts
+    if (concepts.length > 0) {
+      lines.push("");
+      lines.push("## Concepts");
+      lines.push("");
+      const sorted = [...concepts].sort((a, b) => {
+        const aRel = dirPath ? a.id.slice(dirPath.length + 1) : a.id;
+        const bRel = dirPath ? b.id.slice(dirPath.length + 1) : b.id;
+        return compareCodePoint(aRel, bRel);
+      });
+      for (const doc of sorted) {
+        const relId = dirPath ? doc.id.slice(dirPath.length + 1) : doc.id;
+        const title = (typeof doc.frontmatter.title === "string" && doc.frontmatter.title.trim())
+          ? doc.frontmatter.title.trim()
+          : relId.split("/").pop()!;
+        const desc = compactDescription(doc.frontmatter.description);
+        const encoded = encodeRelativePath(relId + ".md");
+        const descPart = desc ? ` — ${desc}` : "";
+        lines.push(`- [${escapeLabel(title)}](${encoded})${descPart}`);
+      }
+    }
+
+    indexes.set(indexPath, lines.join("\n") + "\n");
+  }
+
+  return indexes;
+}
+
+export interface OkfLogResult {
+  markdown: string;
+  diagnostics: KnowledgeDiagnostic[];
+}
+
+function canonicalJsonValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalJsonValue);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([a], [b]) => compareCodePoint(a, b))
+        .map(([key, child]) => [key, canonicalJsonValue(child)]),
+    );
+  }
+  return value;
+}
+
+function okfDiag(
+  severity: "warning" | "error",
+  code: KnowledgeDiagnostic["code"],
+  path: string,
+  message: string,
+): KnowledgeDiagnostic {
+  return { severity, code, path, message };
+}
+
+export function buildOkfLog(eventsJsonl: string, path = "meta/events.jsonl"): OkfLogResult {
+  const diagnostics: KnowledgeDiagnostic[] = [];
+  const events: Array<{
+    seq: number;
+    timestamp: string;
+    date: string;
+    kind: string;
+    details: string;
+  }> = [];
+
+  const lines = eventsJsonl.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line.trim()) continue;
+
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      diagnostics.push(okfDiag("warning", "event_invalid_json", path, `Invalid JSON at line ${i + 1}`));
+      continue;
+    }
+
+    const rawTs = parsed.timestamp;
+    if (typeof rawTs !== "string" || isNaN(Date.parse(rawTs))) {
+      diagnostics.push(okfDiag("warning", "event_invalid_timestamp", path, `Invalid timestamp at line ${i + 1}`));
+      continue;
+    }
+
+    const rawKind = parsed.kind;
+    if (typeof rawKind !== "string" || !rawKind.trim()) {
+      diagnostics.push(okfDiag("warning", "event_missing_kind", path, `Missing kind at line ${i + 1}`));
+      continue;
+    }
+
+    const ts = new Date(rawTs);
+    const date = ts.toISOString().split("T")[0];
+    const kind = rawKind.trim();
+
+    const detailEntries: [string, unknown][] = Object.entries(parsed)
+      .filter(([k]) => k !== "timestamp" && k !== "kind");
+    const details = detailEntries.length > 0
+      ? JSON.stringify(canonicalJsonValue(Object.fromEntries(detailEntries)))
+      : "";
+
+    events.push({ seq: i, timestamp: rawTs, date, kind, details });
+  }
+
+  // Group by date
+  const byDate = new Map<string, typeof events>();
+  for (const ev of events) {
+    if (!byDate.has(ev.date)) byDate.set(ev.date, []);
+    byDate.get(ev.date)!.push(ev);
+  }
+
+  const sortedDates = [...byDate.keys()].sort((a, b) => b.localeCompare(a));
+
+  const outLines: string[] = ["# Wiki Update Log"];
+
+  for (const date of sortedDates) {
+    const dayEvents = byDate.get(date)!;
+    dayEvents.sort((a, b) => {
+      const tsCmp = b.timestamp.localeCompare(a.timestamp);
+      if (tsCmp !== 0) return tsCmp;
+      return b.seq - a.seq;
+    });
+
+    outLines.push("");
+    outLines.push(`## ${date}`);
+    outLines.push("");
+
+    for (const ev of dayEvents) {
+      const escapedKind = ev.kind
+        .replace(/\\/g, "\\\\")
+        .replace(/\*/g, "\\*")
+        .replace(/_/g, "\\_")
+        .replace(/\[/g, "\\[")
+        .replace(/\]/g, "\\]")
+        .replace(/\s+/g, " ");
+
+      if (ev.details) {
+        outLines.push(`- **${escapedKind}**: ${ev.details}`);
+      } else {
+        outLines.push(`- **${escapedKind}**`);
+      }
+    }
+  }
+
+  return {
+    markdown: outLines.join("\n") + "\n",
+    diagnostics,
+  };
 }
