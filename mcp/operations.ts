@@ -7,6 +7,7 @@
  */
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { type ProjectionResult, rebuildMetadata } from "../extensions/llm-wiki/lib/metadata.js";
 import { searchWiki } from "../extensions/llm-wiki/lib/recall.js";
 import { saveInsight } from "../extensions/llm-wiki/lib/retro.js";
 import { captureFile, captureText, captureUrl } from "../extensions/llm-wiki/lib/source-packet.js";
@@ -17,6 +18,17 @@ import {
   inspectWritableVault,
 } from "../extensions/llm-wiki/lib/vault-format.js";
 import { searchRegistry } from "../extensions/llm-wiki/lib/wiki-service.js";
+
+function projectionOutcome(
+  projection: ProjectionResult,
+): { ok: true } | { ok: false; diagnostics: Array<{ code: string; message: string }> } {
+  return projection.ok
+    ? { ok: true }
+    : {
+        ok: false,
+        diagnostics: projection.diagnostics.map(({ code, message }) => ({ code, message })),
+      };
+}
 
 /** Shared recall operation: calls searchWiki and appends vault diagnostics. */
 export async function recallOperation(
@@ -93,6 +105,8 @@ export async function retroOperation(
   }
   try {
     const result = saveInsight(paths, slug, title, body, category, { rebuild: false });
+    const projection = projectionOutcome(rebuildMetadata(paths));
+    if (!projection.ok) return projection;
     return { ok: true, slug: result.slug, sourcePagePath: result.sourcePagePath };
   } catch (error: unknown) {
     if (error instanceof VaultWriteError) {
@@ -128,22 +142,36 @@ export async function captureSourceOperation(
     };
   }
 
-  if (input.url) {
-    const result = await captureUrl(execApi, paths, input.url);
-    return { ok: true, sourceId: result.sourceId };
+  try {
+    let sourceId: string;
+    if (input.url) {
+      sourceId = (await captureUrl(execApi, paths, input.url)).sourceId;
+    } else if (input.filePath) {
+      sourceId = (await captureFile(execApi, paths, input.filePath)).sourceId;
+    } else if (input.text) {
+      sourceId = captureText(paths, input.text, input.title).sourceId;
+    } else {
+      return {
+        ok: false,
+        diagnostics: [
+          {
+            code: "event_missing_kind" as const,
+            message: "Provide one of: text, url, or filePath",
+          },
+        ],
+      };
+    }
+
+    const projection = projectionOutcome(rebuildMetadata(paths));
+    if (!projection.ok) return projection;
+    return { ok: true, sourceId };
+  } catch (error: unknown) {
+    if (error instanceof VaultWriteError) {
+      return {
+        ok: false,
+        diagnostics: error.diagnostics.map((d) => ({ code: d.code, message: d.message })),
+      };
+    }
+    throw error;
   }
-  if (input.filePath) {
-    const result = await captureFile(execApi, paths, input.filePath);
-    return { ok: true, sourceId: result.sourceId };
-  }
-  if (input.text) {
-    const result = captureText(paths, input.text, input.title);
-    return { ok: true, sourceId: result.sourceId };
-  }
-  return {
-    ok: false,
-    diagnostics: [
-      { code: "event_missing_kind" as const, message: "Provide one of: text, url, or filePath" },
-    ],
-  };
 }

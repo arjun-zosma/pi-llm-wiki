@@ -15,6 +15,7 @@ import { join } from "node:path";
 import { McpServer, StdioServerTransport } from "@modelcontextprotocol/server";
 import * as z from "zod/v4";
 import { resolveVaultPaths } from "../extensions/llm-wiki/lib/utils.js";
+import { createExecApi } from "./exec.js";
 import {
   captureSourceOperation,
   recallOperation,
@@ -22,6 +23,8 @@ import {
   searchOperation,
   statusOperation,
 } from "./operations.js";
+
+const execApi = createExecApi();
 
 // ─── Vault Detection ────────────────────────────────────
 
@@ -253,9 +256,7 @@ server.registerTool(
     const result = await captureSourceOperation(
       paths,
       { text, url, filePath: file_path, title },
-      {
-        exec: async () => ({ stdout: "", stderr: "", code: 0, killed: false }),
-      },
+      execApi,
     );
 
     if (!result.ok) {

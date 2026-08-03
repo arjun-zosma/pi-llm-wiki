@@ -1,0 +1,83 @@
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
+import { join } from "node:path";
+import { afterEach, expect, it } from "vitest";
+import { ensureVaultStructure, getVaultPaths } from "../extensions/llm-wiki/lib/utils.js";
+import { createExecApi } from "../mcp/exec.js";
+import { captureSourceOperation } from "../mcp/operations.js";
+
+const roots: string[] = [];
+afterEach(() => {
+  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
+
+it("returns stdout, stderr, exit code, timeout, and abort state", async () => {
+  const api = createExecApi();
+  const success = await api.exec(process.execPath, ["-e", "console.log('ok')"]);
+  expect(success).toMatchObject({ stdout: "ok\n", code: 0, killed: false });
+  const failure = await api.exec(process.execPath, [
+    "-e",
+    "process.stderr.write('bad');process.exit(7)",
+  ]);
+  expect(failure).toMatchObject({ stderr: "bad", code: 7, killed: false });
+  const timedOut = await api.exec(process.execPath, ["-e", "setTimeout(()=>{}, 1000)"], {
+    timeout: 10,
+  });
+  expect(timedOut.killed).toBe(true);
+
+  const controller = new AbortController();
+  const aborted = api.exec(process.execPath, ["-e", "setTimeout(()=>{}, 1000)"], {
+    signal: controller.signal,
+  });
+  controller.abort();
+  await expect(aborted).resolves.toMatchObject({ killed: true });
+});
+
+it("captures local files with a preserved original and current registry", async () => {
+  const root = join(import.meta.dirname, "..", "tmp", `mcp-file-${Date.now()}`);
+  roots.push(root);
+  const paths = getVaultPaths(root);
+  ensureVaultStructure(paths);
+  writeFileSync(join(paths.dotWiki, "config.json"), JSON.stringify({ knowledge_format: "legacy" }));
+  const input = join(root, "input.txt");
+  writeFileSync(input, "MCP file body");
+  const result = await captureSourceOperation(paths, { filePath: input }, createExecApi());
+  expect(result.ok).toBe(true);
+  if (!result.ok) return;
+  expect(existsSync(join(paths.rawSources, result.sourceId, "original", "input.txt"))).toBe(true);
+  const registry = JSON.parse(readFileSync(join(paths.meta, "registry.json"), "utf8"));
+  expect(registry.pages[`sources/${result.sourceId}`]).toBeDefined();
+});
+
+it("captures a local HTTP page through the production MCP runner", async () => {
+  const server = createServer((_request, response) => {
+    response.end("<html><title>Local</title><body><h1>Captured</h1><p>HTTP body</p></body></html>");
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("expected TCP address");
+    const root = join(import.meta.dirname, "..", "tmp", `mcp-url-${Date.now()}`);
+    roots.push(root);
+    const paths = getVaultPaths(root);
+    ensureVaultStructure(paths);
+    writeFileSync(
+      join(paths.dotWiki, "config.json"),
+      JSON.stringify({ knowledge_format: "legacy" }),
+    );
+    const result = await captureSourceOperation(
+      paths,
+      { url: `http://127.0.0.1:${address.port}/source` },
+      createExecApi(),
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(readFileSync(join(paths.rawSources, result.sourceId, "extracted.md"), "utf8")).toContain(
+      "HTTP body",
+    );
+  } finally {
+    await new Promise<void>((resolve, reject) =>
+      server.close((error) => (error ? reject(error) : resolve())),
+    );
+  }
+});

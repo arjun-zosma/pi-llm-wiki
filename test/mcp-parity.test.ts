@@ -8,6 +8,7 @@ import { captureText } from "../extensions/llm-wiki/lib/source-packet.js";
 import { ensureVaultStructure, getVaultPaths } from "../extensions/llm-wiki/lib/utils.js";
 import { inspectVaultFormat } from "../extensions/llm-wiki/lib/vault-format.js";
 import { getWikiStatus, searchRegistry } from "../extensions/llm-wiki/lib/wiki-service.js";
+import { createExecApi } from "../mcp/exec.js";
 import {
   captureSourceOperation,
   recallOperation,
@@ -127,6 +128,39 @@ describe("MCP parity with shared services", () => {
     const mcpPage = readFileSync(join(paths.wiki, "sources", `${mcpResult.sourceId}.md`), "utf-8");
     expect(piPage).toContain("type: source");
     expect(mcpPage).toContain("type: source");
+  });
+
+  it("makes MCP retro immediately searchable", async () => {
+    const result = await retroOperation(
+      paths,
+      "mcp-visible",
+      "Visible Insight",
+      "searchable needle",
+    );
+    expect(result.ok).toBe(true);
+    expect(searchRegistry(paths, "Visible Insight").matches.map((match) => match.id)).toContain(
+      "sources/mcp-visible",
+    );
+  });
+
+  it("makes MCP text capture immediately recallable", async () => {
+    const result = await captureSourceOperation(
+      paths,
+      { text: "capture needle", title: "Visible Capture" },
+      createExecApi(),
+    );
+    expect(result.ok).toBe(true);
+    expect(searchRegistry(paths, "Visible Capture").matches).toHaveLength(1);
+  });
+
+  it("returns blocking projection diagnostics after a successful authoritative write", async () => {
+    writeFileSync(join(paths.wiki, "concepts", "bad.md"), "malformed\n");
+    const result = await retroOperation(paths, "written-but-blocked", "Written", "Body");
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.diagnostics.map((diagnostic) => diagnostic.code)).toContain(
+      "frontmatter_missing",
+    );
   });
 
   it("exactly five tools registered", () => {
