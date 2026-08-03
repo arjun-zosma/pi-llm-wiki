@@ -113,7 +113,7 @@ export function extractLegacyWikilinks(body: string): ExtractedLink[] {
 function resolveMarkdownTarget(
   target: string,
   sourceId: string,
-): { kind: "concept"; id: string } | { kind: "escape" } | { kind: "external" } | { kind: "empty" } {
+): { kind: "concept"; id: string } | { kind: "escape" } | { kind: "external" } | { kind: "empty" } | { kind: "invalid" } {
   // Strip query and fragment (earliest delimiter)
   const qIndex = target.indexOf("?");
   const fIndex = target.indexOf("#");
@@ -129,9 +129,14 @@ function resolveMarkdownTarget(
   // Ignore external URI schemes
   if (/^[a-z][a-z0-9+.-]*:/i.test(clean)) return { kind: "external" };
 
-  // Percent-decode each segment once
-  const segments = clean.split("/");
-  const decoded = segments.map((s) => decodeURIComponent(s));
+  // Percent-decode each segment once, but never let malformed user input escape
+  // the link diagnostics boundary.
+  let decoded: string[];
+  try {
+    decoded = clean.split("/").map((segment) => decodeURIComponent(segment));
+  } catch {
+    return { kind: "invalid" };
+  }
 
   // Convert decoded backslashes to /
   const normalized = decoded.map((s) => s.replace(/\\/g, "/")).join("/");
@@ -154,10 +159,8 @@ function resolveMarkdownTarget(
       }
     }
     const resolved = stack.join("/");
-    if (resolved.endsWith(".md")) {
-      return { kind: "concept", id: resolved.slice(0, -3) };
-    }
-    return { kind: "concept", id: resolved };
+    if (!resolved.endsWith(".md")) return { kind: "empty" };
+    return { kind: "concept", id: resolved.slice(0, -3) };
   }
 
   // For file-relative paths, resolve against source directory
@@ -214,6 +217,15 @@ export function buildResolvedBacklinks(
           "link_path_escape",
           `${sourceId}.md`,
           `Link escapes bundle root: ${link.target}`,
+        ),
+      );
+    } else if (resolved.kind === "invalid") {
+      diagnostics.push(
+        diag(
+          "warning",
+          "link_unresolved",
+          `${sourceId}.md`,
+          `Malformed percent-encoded link: ${link.target}`,
         ),
       );
     } else if (resolved.kind === "concept") {

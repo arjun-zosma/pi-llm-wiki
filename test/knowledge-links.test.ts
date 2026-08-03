@@ -65,6 +65,30 @@ describe("knowledge links", () => {
     ]);
   });
 
+  it("turns malformed percent encoding into a diagnostic instead of throwing", () => {
+    expect(() =>
+      buildResolvedBacklinks("concepts/source", "[bad](bad%ZZ.md)", known),
+    ).not.toThrow();
+    const result = buildResolvedBacklinks(
+      "concepts/source",
+      "[bad](bad%ZZ.md)",
+      known,
+    );
+    expect(result.targets).toEqual([]);
+    expect(result.diagnostics.map((diagnostic) => diagnostic.code)).toEqual([
+      "link_unresolved",
+    ]);
+  });
+
+  it("requires md suffix for root-relative Markdown links", () => {
+    const result = buildResolvedBacklinks(
+      "concepts/source",
+      "[missing suffix](/shared/root)",
+      known,
+    );
+    expect(result.targets).toEqual([]);
+  });
+
   it("deduplicates mixed Markdown and wikilink edges", () => {
     const result = buildResolvedBacklinks(
       "concepts/source",

@@ -1,4 +1,4 @@
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { ensureVaultStructure, getVaultPaths, slugify } from "../extensions/llm-wiki/lib/utils.js";
@@ -57,6 +57,45 @@ describe("vault format", () => {
     writeFileSync(join(paths.wiki, "log.md"), "user file");
     const scan = discoverKnowledgeDocuments(paths);
     expect(scan.documents.map((d) => d.id)).toEqual(["concepts/café"]);
+  });
+
+  it("blocks physically distinct NFC-equivalent paths", () => {
+    const paths = vault({ knowledge_format: "okf-0.2" });
+    mkdirSync(join(paths.wiki, "concepts"), { recursive: true });
+    writeFileSync(join(paths.wiki, "concepts", "café.md"), "---\ntype: concept\n---\n");
+    writeFileSync(join(paths.wiki, "concepts", "café.md"), "---\ntype: concept\n---\n");
+    const result = discoverKnowledgeDocuments(paths);
+    expect(result.blocking).toBe(true);
+    expect(result.diagnostics.map((diagnostic) => diagnostic.code)).toContain(
+      "concept_identity_collision",
+    );
+  });
+
+  it("does not follow directory symlinks outside the wiki", () => {
+    const paths = vault({ knowledge_format: "legacy" });
+    const external = join(paths.root, "external");
+    mkdirSync(external, { recursive: true });
+    writeFileSync(join(external, "outside.md"), "---\ntype: concept\n---\n");
+    symlinkSync(external, join(paths.wiki, "linked"), "dir");
+    expect(discoverKnowledgeDocuments(paths).documents).toEqual([]);
+  });
+
+  it("blocks publication when a knowledge directory cannot be scanned", () => {
+    const paths = vault({ knowledge_format: "legacy" });
+    const unreadable = join(paths.wiki, "concepts");
+    mkdirSync(unreadable, { recursive: true });
+    chmodSync(unreadable, 0o000);
+    try {
+      const result = discoverKnowledgeDocuments(paths);
+      if (process.getuid?.() !== 0) {
+        expect(result.blocking).toBe(true);
+        expect(result.diagnostics.map((diagnostic) => diagnostic.code)).toContain(
+          "frontmatter_parse_error",
+        );
+      }
+    } finally {
+      chmodSync(unreadable, 0o700);
+    }
   });
 
   it("blocks NFC and case-fold collisions without returning a partial scan", () => {

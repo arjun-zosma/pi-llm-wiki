@@ -1,6 +1,5 @@
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { normalize, relative } from "node:path";
-import { posix } from "node:path";
+import { existsSync, lstatSync, readFileSync, readdirSync } from "node:fs";
+import { join, relative } from "node:path";
 import {
   type KnowledgeDiagnostic,
   type KnowledgeDocument,
@@ -52,7 +51,7 @@ function isReservedName(filename: string): boolean {
 function readConfigJson(
   dotWiki: string,
 ): { ok: true; config: Record<string, unknown> } | { ok: false; error: string } {
-  const path = posix.join(dotWiki, "config.json");
+  const path = join(dotWiki, "config.json");
   try {
     const content = readFileSync(path, "utf8");
     const config = JSON.parse(content);
@@ -108,7 +107,7 @@ export function inspectVaultFormat(paths: VaultPaths): VaultFormatState {
   // In OKF mode, check root index version
   // Missing root index is repairable; version mismatch blocks until explicitly handled
   if (format === "okf-0.2") {
-    const rootIndexPath = posix.join(paths.wiki, "index.md");
+    const rootIndexPath = join(paths.wiki, "index.md");
     try {
       const content = readFileSync(rootIndexPath, "utf8");
       const frontmatter = parseMarkdownFrontmatter(content, "index.md");
@@ -133,7 +132,7 @@ export function inspectVaultFormat(paths: VaultPaths): VaultFormatState {
 
   // In legacy mode, check if root index declares unsupported version
   if (format === "legacy") {
-    const rootIndexPath = posix.join(paths.wiki, "index.md");
+    const rootIndexPath = join(paths.wiki, "index.md");
     try {
       const content = readFileSync(rootIndexPath, "utf8");
       const frontmatter = parseMarkdownFrontmatter(content, "index.md");
@@ -162,23 +161,53 @@ export function inspectVaultFormat(paths: VaultPaths): VaultFormatState {
   };
 }
 
-function collectMarkdownFiles(dir: string, baseDir: string): string[] {
+interface MarkdownScan {
+  files: string[];
+  diagnostics: KnowledgeDiagnostic[];
+}
+
+function collectMarkdownFiles(dir: string, wikiRoot: string): MarkdownScan {
   const files: string[] = [];
+  const diagnostics: KnowledgeDiagnostic[] = [];
+  let entries: string[];
   try {
-    const entries = readdirSync(dir);
-    for (const entry of entries) {
-      const fullPath = posix.join(dir, entry);
-      const stat = statSync(fullPath);
+    entries = readdirSync(dir).sort(compareCodePoint);
+  } catch (error: unknown) {
+    diagnostics.push(
+      diag(
+        "error",
+        "frontmatter_parse_error",
+        relative(wikiRoot, dir).replace(/\\/g, "/") || ".",
+        `Failed to scan knowledge directory: ${(error as Error).message}`,
+      ),
+    );
+    return { files, diagnostics };
+  }
+
+  for (const entry of entries) {
+    const fullPath = join(dir, entry);
+    try {
+      const stat = lstatSync(fullPath);
+      if (stat.isSymbolicLink()) continue;
       if (stat.isDirectory()) {
-        files.push(...collectMarkdownFiles(fullPath, baseDir));
-      } else if (entry.toLowerCase().endsWith(".md") && !isReservedName(entry)) {
+        const child = collectMarkdownFiles(fullPath, wikiRoot);
+        files.push(...child.files);
+        diagnostics.push(...child.diagnostics);
+      } else if (stat.isFile() && entry.toLowerCase().endsWith(".md") && !isReservedName(entry)) {
         files.push(fullPath);
       }
+    } catch (error: unknown) {
+      diagnostics.push(
+        diag(
+          "error",
+          "frontmatter_parse_error",
+          relative(wikiRoot, fullPath).replace(/\\/g, "/"),
+          `Failed to inspect knowledge path: ${(error as Error).message}`,
+        ),
+      );
     }
-  } catch {
-    // Skip unreadable directories
   }
-  return files;
+  return { files, diagnostics };
 }
 
 /** Validate vault is writable: exists, valid mode, no blocking version mismatch. */
@@ -221,37 +250,39 @@ export function discoverKnowledgeDocuments(paths: VaultPaths): DiscoveryResult {
   const diagnostics: KnowledgeDiagnostic[] = [];
   const documents: DiscoveredDocument[] = [];
   let blocking = false;
-  const seenIds = new Map<string, string>(); // normalized id -> original id
+  const seenIds = new Map<string, { id: string; physicalPath: string }>();
 
-  const files = collectMarkdownFiles(paths.wiki, paths.wiki);
+  const scan = collectMarkdownFiles(paths.wiki, paths.wiki);
+  diagnostics.push(...scan.diagnostics);
+  if (scan.diagnostics.length > 0) blocking = true;
 
-  for (const file of files) {
-    const relativePath = posix.relative(paths.wiki, file);
-    const normalizedPath = normalize(relativePath).replace(/\\/g, "/").normalize("NFC");
+  for (const file of scan.files) {
+    const physicalPath = relative(paths.wiki, file).replace(/\\/g, "/");
+    const normalizedPath = physicalPath.normalize("NFC");
     const id = normalizedPath.replace(/\.md$/, "");
 
     // Check for reserved names (case-insensitive)
-    const filename = posix.basename(normalizedPath, ".md").toLowerCase();
+    const filename = (normalizedPath.split("/").pop() ?? "").replace(/\.md$/i, "").toLowerCase();
     if (RESERVED_NAMES.has(filename)) {
       continue;
     }
 
     // Check for identity collision
-    const normalizedId = id.toLowerCase();
-    const existing = seenIds.get(normalizedId);
-    if (existing && existing !== id) {
+    const collisionKey = id.toLowerCase();
+    const existing = seenIds.get(collisionKey);
+    if (existing && existing.physicalPath !== physicalPath) {
       diagnostics.push(
         diag(
           "error",
           "concept_identity_collision",
-          normalizedPath,
-          `Identity collision with ${existing}: ${id}`,
+          physicalPath,
+          `Identity collision between ${existing.physicalPath} and ${physicalPath}`,
         ),
       );
       blocking = true;
       continue;
     }
-    seenIds.set(normalizedId, id);
+    seenIds.set(collisionKey, { id, physicalPath });
 
     // Parse the document
     try {
