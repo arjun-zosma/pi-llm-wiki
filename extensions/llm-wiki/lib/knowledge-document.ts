@@ -159,8 +159,9 @@ function diag(
   return { severity, code, path, message, line, column };
 }
 
-function classifySources(raw: KnowledgeValue): KnowledgeSources {
-  if (raw === undefined || raw === null) return { kind: "absent" };
+function classifySources(raw: KnowledgeValue | undefined): KnowledgeSources {
+  if (raw === undefined) return { kind: "absent" };
+  if (raw === null) return { kind: "unknown-shape", value: null };
   if (typeof raw === "string") return { kind: "legacy-scalar", value: raw };
   if (Array.isArray(raw)) {
     if (raw.every((v) => typeof v === "string")) {
@@ -226,6 +227,7 @@ function toKnowledgeValue(node: unknown): KnowledgeValue {
   if (node === null) return null;
   if (isScalar(node)) {
     const v = node.value;
+    if (v === null) return null;
     if (typeof v === "boolean" || typeof v === "number" || typeof v === "string") return v;
     return String(v);
   }
@@ -233,7 +235,7 @@ function toKnowledgeValue(node: unknown): KnowledgeValue {
     return node.items.map(toKnowledgeValue);
   }
   if (isMap(node)) {
-    const obj: Record<string, KnowledgeValue> = {};
+    const obj: Record<string, KnowledgeValue> = Object.create(null);
     for (const item of node.items) {
       const key = String(isScalar(item.key) ? item.key.value : item.key);
       obj[key] = toKnowledgeValue(item.value);
@@ -258,7 +260,7 @@ function parseFrontmatterBlock(
   const normalized = content.replace(/\r\n?/g, "\n");
 
   // Require opening --- on line 1
-  if (!normalized.startsWith("---")) {
+  if (!normalized.startsWith("---\n")) {
     return {
       ok: false,
       diagnostics: [
@@ -336,7 +338,7 @@ function parseFrontmatterBlock(
     docs = parseAllDocuments(yamlText, {
       schema: "core",
       merge: false,
-      uniqueKeys: false, // disable so we can detect duplicates ourselves
+      uniqueKeys: true,
     });
   } catch (e: unknown) {
     const err = e as Error & { pos?: number; line?: number; col?: number };
@@ -350,6 +352,26 @@ function parseFrontmatterBlock(
           `YAML parse error: ${err.message}`,
           err.line ?? undefined,
           err.col ?? undefined,
+        ),
+      ],
+    };
+  }
+
+  // YAML parser errors must be surfaced before conversion. `yaml` records
+  // malformed syntax and nested duplicate keys on the Document instead of
+  // throwing from parseAllDocuments.
+  const yamlErrors = docs.flatMap((document) => document.errors);
+  if (yamlErrors.length > 0) {
+    const duplicate = yamlErrors.find((error) => error.code === "DUPLICATE_KEY");
+    const error = duplicate ?? yamlErrors[0];
+    return {
+      ok: false,
+      diagnostics: [
+        diag(
+          "error",
+          duplicate ? "frontmatter_duplicate_key" : "frontmatter_parse_error",
+          path,
+          `YAML parse error: ${error.message}`,
         ),
       ],
     };
@@ -461,11 +483,7 @@ function parseFrontmatterBlock(
 
   // Require type field
   const rawType = mapping.type;
-  if (
-    rawType === undefined ||
-    rawType === null ||
-    (typeof rawType === "string" && rawType.trim() === "")
-  ) {
+  if (typeof rawType !== "string" || rawType.trim() === "") {
     return {
       ok: false,
       diagnostics: [diag("error", "concept_missing_type", path, "Missing or empty type field")],
@@ -476,8 +494,8 @@ function parseFrontmatterBlock(
   const sources = classifySources(mapping.sources);
 
   // Split standard fields from extensions
-  const frontmatter: KnowledgeFrontmatter = { type: String(rawType) };
-  const extensions: Record<string, KnowledgeValue> = {};
+  const frontmatter: KnowledgeFrontmatter = { type: rawType };
+  const extensions: Record<string, KnowledgeValue> = Object.create(null);
   const legacyFields: string[] = [];
 
   for (const [key, value] of Object.entries(mapping)) {
@@ -535,7 +553,7 @@ export function parseKnowledgeDocument(content: string, path: string): ParseKnow
 
 export function serializeKnowledgeDocument(document: KnowledgeDocument): string {
   // Rebuild mapping from frontmatter, sources, and extensions
-  const mapping: Record<string, KnowledgeValue> = {};
+  const mapping: Record<string, KnowledgeValue> = Object.create(null);
 
   // Standard frontmatter fields (excluding sources)
   for (const key of STANDARD_FIELDS) {
@@ -573,8 +591,12 @@ export function createKnowledgeDocument(
   body: string,
   sources?: Array<Record<string, KnowledgeValue>>,
 ): KnowledgeDocument {
+  if (Object.hasOwn(fields, "sources")) {
+    throw new Error("Pass canonical sources as the fourth argument");
+  }
+
   const frontmatter: KnowledgeFrontmatter = { type: fields.type };
-  const extensions: Record<string, KnowledgeValue> = {};
+  const extensions: Record<string, KnowledgeValue> = Object.create(null);
 
   for (const [key, value] of Object.entries(fields)) {
     if (key === "type") continue;

@@ -66,6 +66,56 @@ describe("KnowledgeDocument", () => {
     expect(result.diagnostics[0].path).toBe("concepts/bad.md");
   });
 
+  it.each([
+    ["frontmatter_parse_error", "---\ntype: concept\nx: [1,\n---\n"],
+    ["frontmatter_duplicate_key", "---\ntype: concept\nx:\n  a: 1\n  a: 2\n---\n"],
+    ["frontmatter_missing", "---oops\ntype: concept\n---\n"],
+    ["concept_missing_type", "---\ntype: 42\n---\n"],
+    ["concept_missing_type", "---\ntype: []\n---\n"],
+  ])("rejects adversarial input with %s", (code, input) => {
+    const result = parseKnowledgeDocument(input, "concepts/adversarial.md");
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics.map((diagnostic) => diagnostic.code)).toContain(code);
+  });
+
+  it("preserves null and prototype-named unknown fields semantically", () => {
+    const input = [
+      "---",
+      "type: concept",
+      "nullable: null",
+      "__proto__:",
+      "  enabled: true",
+      "constructor:",
+      "  nested: value",
+      "---",
+      "",
+      "Body.",
+      "",
+    ].join("\n");
+    const first = parsed(input);
+    expect(first.extensions.nullable).toBeNull();
+    expect(Object.hasOwn(first.extensions, "__proto__")).toBe(true);
+    expect(first.extensions.__proto__).toEqual({ enabled: true });
+    const second = parsed(serializeKnowledgeDocument(first));
+    expect(second.extensions).toEqual(first.extensions);
+  });
+
+  it("preserves explicit null sources as an unknown shape", () => {
+    const doc = parsed("---\ntype: concept\nsources: null\n---\n");
+    expect(doc.sources).toEqual({ kind: "unknown-shape", value: null });
+    expect(parsed(serializeKnowledgeDocument(doc)).sources).toEqual(doc.sources);
+  });
+
+  it("rejects sources passed through creation fields instead of the canonical argument", () => {
+    expect(() =>
+      createKnowledgeDocument(
+        "concepts/bad.md",
+        { type: "concept", sources: [] } as never,
+        "Body.",
+      ),
+    ).toThrow("Pass canonical sources as the fourth argument");
+  });
+
   it("rejects missing frontmatter, missing type, byte overflow, and depth overflow", () => {
     expect(parseKnowledgeDocument("# Body\n", "concepts/a.md").diagnostics[0].code).toBe(
       "frontmatter_missing",
