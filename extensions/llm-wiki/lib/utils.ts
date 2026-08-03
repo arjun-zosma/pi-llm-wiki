@@ -34,13 +34,12 @@ export type VaultFormat = "new" | "legacy" | "none";
 
 /**
  * Detect the vault format at a given directory.
- * Returns "new" if .llm-wiki/config.json exists,
- * "legacy" if .wiki/config.json exists,
- * "none" otherwise.
+ * Returns "new" if .llm-wiki exists, "legacy" if .wiki exists,
+ * and "none" otherwise. A missing config is still a detected, damaged vault.
  */
 export function detectVaultFormat(dir: string): VaultFormat {
-  if (existsSync(join(dir, ".llm-wiki", "config.json"))) return "new";
-  if (existsSync(join(dir, ".wiki", "config.json"))) return "legacy";
+  if (existsSync(join(dir, ".llm-wiki"))) return "new";
+  if (existsSync(join(dir, ".wiki"))) return "legacy";
   return "none";
 }
 
@@ -333,12 +332,14 @@ function realpathWithMissingTail(path: string): string {
   }
 }
 
+/** Return the candidate path relative to the physical root. */
+export function relativePhysicalPath(rootPath: string, candidatePath: string): string {
+  return relative(realpathWithMissingTail(rootPath), realpathWithMissingTail(candidatePath));
+}
+
 /** Check physical containment, resolving existing symlink ancestors. */
 export function isPathWithin(rootPath: string, candidatePath: string): boolean {
-  const relation = relative(
-    realpathWithMissingTail(rootPath),
-    realpathWithMissingTail(candidatePath),
-  );
+  const relation = relativePhysicalPath(rootPath, candidatePath);
   return (
     relation === "" ||
     (!isAbsolute(relation) && relation !== ".." && !relation.startsWith(`..${sep}`))

@@ -1,12 +1,12 @@
 import { existsSync, lstatSync, readFileSync, readdirSync } from "node:fs";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { isAbsolute, join, relative, sep } from "node:path";
 import {
   type KnowledgeDiagnostic,
   type KnowledgeDocument,
   parseKnowledgeDocument,
   parseMarkdownFrontmatter,
 } from "./knowledge-document.js";
-import { type VaultPaths, isPathWithin } from "./utils.js";
+import { type VaultPaths, relativePhysicalPath } from "./utils.js";
 
 export type KnowledgeFormat = "legacy" | "okf-0.2";
 
@@ -271,10 +271,9 @@ export function assertWritableVault(paths: VaultPaths): KnowledgeFormat {
 export function isGeneratedOkfPath(path: string, paths: VaultPaths): boolean {
   const state = inspectVaultFormat(paths);
   if (state.blocking || state.knowledgeFormat !== "okf-0.2") return false;
-  if (!isPathWithin(paths.wiki, path)) return false;
-  const rel = relative(paths.wiki, resolve(path));
+  const rel = relativePhysicalPath(paths.wiki, path);
   if (!rel || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return false;
-  const parts = rel.split(/[\\/]/);
+  const parts = rel.split(sep);
   const name = parts.at(-1)?.toLowerCase();
   return name === "index.md" || (parts.length === 1 && name === "log.md");
 }

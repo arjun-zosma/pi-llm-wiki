@@ -69,6 +69,30 @@ describe("bootstrap", () => {
     expect(readFileSync(join(paths.wiki, "log.md"), "utf8")).toContain("bootstrap");
   });
 
+  it("blocks a damaged project vault instead of falling back to personal wiki", async () => {
+    const cwd = root();
+    const paths = getVaultPaths(cwd);
+    mkdirSync(join(paths.wiki, "concepts"), { recursive: true });
+    writeFileSync(join(paths.wiki, "concepts", "bad.md"), "malformed\n");
+    process.chdir(cwd);
+    Reflect.deleteProperty(process.env, "WIKI_HOME");
+    expect(resolveVaultPaths(cwd).root).toBe(cwd);
+    const { handlers } = extensionHarness();
+    const statuses: string[] = [];
+    const sessionStart = handlers.get("session_start")?.at(-1);
+    await sessionStart?.(
+      {},
+      {
+        cwd,
+        hasUI: true,
+        ui: { setStatus: (_key: string, value: string) => statuses.push(value) },
+        model: { id: "test" },
+      },
+    );
+    expect(statuses.some((status) => status.includes("setup blocked"))).toBe(true);
+    expect(existsSync(join(paths.dotWiki, "config.json"))).toBe(false);
+  });
+
   it("blocks an existing invalid vault during real session startup", async () => {
     const cwd = root();
     const paths = getVaultPaths(cwd);

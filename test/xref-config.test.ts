@@ -193,6 +193,13 @@ describe("backward compatibility", () => {
     expect(detectVaultFormat(wikiDir)).toBe("new");
   });
 
+  it("should detect a damaged project vault without config", () => {
+    mkdirSync(join(wikiDir, ".llm-wiki", "wiki", "concepts"), { recursive: true });
+    expect(detectVaultFormat(wikiDir)).toBe("new");
+    expect(resolveVaultPaths(wikiDir).root).toBe(wikiDir);
+    expect(resolveVaultPaths(wikiDir).dotWiki).toBe(join(wikiDir, ".llm-wiki"));
+  });
+
   it("should detect legacy-format vault by .wiki/config.json", () => {
     const oldDir = join(wikiDir, ".wiki");
     mkdirSync(oldDir, { recursive: true });

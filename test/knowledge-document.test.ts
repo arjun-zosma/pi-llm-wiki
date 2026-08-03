@@ -21,6 +21,9 @@ function parsed(content: string, path = "concepts/test.md") {
 function creationFieldsRejectSources(): void {
   // @ts-expect-error Sources must use the canonical fourth argument.
   createKnowledgeDocument("concepts/type-check.md", { type: "concept", sources: [] }, "Body.");
+  const undefinedFields = { type: "concept", sources: undefined };
+  // @ts-expect-error Explicit undefined is not a valid creation-field source.
+  createKnowledgeDocument("concepts/type-check-undefined.md", undefinedFields, "Body.");
 }
 
 describe("KnowledgeDocument", () => {

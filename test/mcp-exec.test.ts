@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
@@ -44,6 +44,32 @@ it("returns stdout, stderr, exit code, timeout, and abort state", async () => {
   });
   controller.abort();
   await expect(aborted).resolves.toMatchObject({ killed: true });
+});
+
+it("kills descendant processes when a command times out", async () => {
+  const root = join(import.meta.dirname, "..", "tmp", `mcp-tree-${Date.now()}`);
+  roots.push(root);
+  mkdirSync(root, { recursive: true });
+  const marker = join(root, "child.pid");
+  const script = [
+    "const {spawn}=require('node:child_process')",
+    `const fs=require('node:fs');const child=spawn(process.execPath,['-e','setTimeout(()=>{},5000)']);fs.writeFileSync(${JSON.stringify(marker)},String(child.pid));`,
+    "process.on('SIGTERM',()=>{});setTimeout(()=>{},5000)",
+  ].join(";");
+  const result = await createExecApi().exec(process.execPath, ["-e", script], { timeout: 100 });
+  expect(result, JSON.stringify(result)).toMatchObject({ killed: true });
+  const childPid = Number(readFileSync(marker, "utf8"));
+  let alive = true;
+  for (let attempt = 0; attempt < 20; attempt++) {
+    try {
+      process.kill(childPid, 0);
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    } catch {
+      alive = false;
+      break;
+    }
+  }
+  expect(alive).toBe(false);
 });
 
 it("rejects failed commands and preserves local originals without shell copy", async () => {

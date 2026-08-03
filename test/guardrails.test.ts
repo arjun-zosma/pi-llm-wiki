@@ -75,6 +75,10 @@ describe("edit guardrails", () => {
     symlinkSync(paths.raw, join(paths.wiki, "raw-alias"), "dir");
     symlinkSync(paths.meta, join(paths.wiki, "meta-alias"), "dir");
     symlinkSync(paths.wiki, join(paths.wiki, "wiki-alias"), "dir");
+    const external = join(root, "external");
+    mkdirSync(external, { recursive: true });
+    symlinkSync(paths.wiki, join(external, "wiki-alias"), "dir");
+    const externalIndex = join(external, "wiki-alias", "index.md");
     try {
       expect(
         mutationBlockReason(join(paths.wiki, "raw-alias", "sources", "x.md"), paths),
@@ -85,6 +89,10 @@ describe("edit guardrails", () => {
       expect(mutationBlockReason(join(paths.wiki, "wiki-alias", "index.md"), paths)).toContain(
         "Generated OKF",
       );
+      expect(mutationBlockReason(externalIndex, paths)).toContain("Generated OKF");
+      expect(hasWikiMutation({ path: externalIndex }, paths.wiki)).toBe(true);
+      writeFileSync(join(paths.dotWiki, "config.json"), "{broken");
+      expect(mutationBlockReason(externalIndex, paths)).toContain("configuration is invalid");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

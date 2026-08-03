@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import type { ExecApi } from "../extensions/llm-wiki/lib/utils.js";
 
 export function createExecApi(): ExecApi {
@@ -8,36 +8,56 @@ export function createExecApi(): ExecApi {
         let killed = false;
         let settled = false;
         let forceTimer: NodeJS.Timeout | undefined;
-        const child = execFile(
-          command,
-          args,
-          {
-            cwd: options.cwd,
-            encoding: "utf8",
-            maxBuffer: 16 * 1024 * 1024,
-          },
-          (error, stdout, stderr) => {
-            cleanup();
-            resolve({
-              stdout: String(stdout),
-              stderr: String(stderr),
-              code: typeof error?.code === "number" ? error.code : error ? 1 : killed ? 1 : 0,
-              killed,
-            });
-          },
-        );
+        let stdout = "";
+        let stderr = "";
+        const child = spawn(command, args, {
+          cwd: options.cwd,
+          stdio: ["ignore", "pipe", "pipe"],
+          detached: process.platform !== "win32",
+        });
+        child.stdout?.setEncoding("utf8");
+        child.stderr?.setEncoding("utf8");
+        child.stdout?.on("data", (chunk: string) => {
+          stdout += chunk;
+        });
+        child.stderr?.on("data", (chunk: string) => {
+          stderr += chunk;
+        });
 
+        const sendSignal = (signal: "SIGTERM" | "SIGKILL") => {
+          if (process.platform === "win32" && child.pid) {
+            execFile("taskkill", ["/pid", String(child.pid), "/T", "/F"], () => {});
+            return;
+          }
+          if (child.pid) {
+            try {
+              process.kill(-child.pid, signal);
+              return;
+            } catch {
+              // Fall back to the direct child when process-group signalling fails.
+            }
+          }
+          child.kill(signal);
+        };
         const stop = () => {
           if (killed) return;
           killed = true;
-          child.kill("SIGTERM");
+          sendSignal("SIGTERM");
           forceTimer = setTimeout(() => {
-            if (!settled) child.kill("SIGKILL");
+            if (!settled) sendSignal("SIGKILL");
           }, 100);
         };
         const timer = options.timeout ? setTimeout(stop, options.timeout) : undefined;
         const abort = () => stop();
         options.signal?.addEventListener("abort", abort, { once: true });
+
+        const finish = (code: number) => {
+          if (settled) return;
+          cleanup();
+          resolve({ stdout, stderr, code: killed && code === 0 ? 1 : code, killed });
+        };
+        child.once("error", () => finish(1));
+        child.once("close", (code) => finish(typeof code === "number" ? code : 1));
 
         function cleanup() {
           settled = true;

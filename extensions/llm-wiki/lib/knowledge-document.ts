@@ -594,9 +594,9 @@ export function serializeKnowledgeDocument(document: KnowledgeDocument): string 
   return body ? `---\n${yaml}---\n\n${body}\n` : `---\n${yaml}---\n`;
 }
 
-export function createKnowledgeDocument(
+export function createKnowledgeDocument<T extends KnowledgeCreationFields>(
   path: string,
-  fields: KnowledgeCreationFields,
+  fields: T & NoInfer<KnowledgeCreationFields>,
   body: string,
   sources?: Array<Record<string, KnowledgeValue>>,
 ): KnowledgeDocument {
