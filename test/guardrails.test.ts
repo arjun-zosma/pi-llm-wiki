@@ -98,6 +98,33 @@ describe("edit guardrails", () => {
     }
   });
 
+  it("blocks dangling final symlinks that resolve into guarded vault paths", () => {
+    const root = join(import.meta.dirname, "..", "tmp", `guardrail-${Date.now()}`);
+    const paths = getVaultPaths(root);
+    ensureVaultStructure(paths);
+    writeFileSync(
+      join(paths.dotWiki, "config.json"),
+      JSON.stringify({ knowledge_format: "okf-0.2" }),
+    );
+    const external = join(root, "external");
+    mkdirSync(external, { recursive: true });
+    const rawAlias = join(external, "raw-alias.md");
+    const indexAlias = join(external, "index-alias.md");
+    const pageAlias = join(external, "page-alias.md");
+    symlinkSync(join(paths.raw, "future.md"), rawAlias);
+    symlinkSync(join(paths.wiki, "index.md"), indexAlias);
+    symlinkSync(join(paths.wiki, "concepts", "future.md"), pageAlias);
+    try {
+      expect(mutationBlockReason(rawAlias, paths)).toContain("Raw sources");
+      expect(mutationBlockReason(indexAlias, paths)).toContain("Generated OKF");
+      expect(hasWikiMutation({ path: pageAlias }, paths.wiki)).toBe(true);
+      writeFileSync(join(paths.dotWiki, "config.json"), "{broken");
+      expect(mutationBlockReason(pageAlias, paths)).toContain("configuration is invalid");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("extracts every file target from an Edit patch", () => {
     const paths = extractMutationPaths({
       patch: [

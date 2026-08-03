@@ -53,8 +53,8 @@ it("kills descendant processes when a command times out", async () => {
   const marker = join(root, "child.pid");
   const script = [
     "const {spawn}=require('node:child_process')",
-    `const fs=require('node:fs');const child=spawn(process.execPath,['-e','setTimeout(()=>{},5000)']);fs.writeFileSync(${JSON.stringify(marker)},String(child.pid));`,
-    "process.on('SIGTERM',()=>{});setTimeout(()=>{},5000)",
+    `const fs=require('node:fs');const child=spawn(process.execPath,['-e',\"process.on('SIGTERM',()=>{});setTimeout(()=>{},5000)\"],{stdio:'ignore'});fs.writeFileSync(${JSON.stringify(marker)},String(child.pid))`,
+    "setTimeout(()=>{},5000)",
   ].join(";");
   const result = await createExecApi().exec(process.execPath, ["-e", script], { timeout: 100 });
   expect(result, JSON.stringify(result)).toMatchObject({ killed: true });
@@ -70,6 +70,16 @@ it("kills descendant processes when a command times out", async () => {
     }
   }
   expect(alive).toBe(false);
+});
+
+it("bounds captured command output", async () => {
+  const result = await createExecApi().exec(
+    process.execPath,
+    ["-e", "process.stdout.write('x'.repeat(17*1024*1024));setTimeout(()=>{},5000)"],
+    { timeout: 5_000 },
+  );
+  expect(result.killed).toBe(true);
+  expect(Buffer.byteLength(result.stdout)).toBeLessThanOrEqual(16 * 1024 * 1024);
 });
 
 it("rejects failed commands and preserves local originals without shell copy", async () => {

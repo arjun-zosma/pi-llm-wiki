@@ -4,6 +4,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  readlinkSync,
   realpathSync,
   renameSync,
   rmdirSync,
@@ -314,11 +315,24 @@ export async function exec(
   return result;
 }
 
-function realpathWithMissingTail(path: string): string {
+function realpathWithMissingTail(path: string, seen = new Set<string>()): string {
   let current = resolve(path);
+  if (seen.has(current)) return current;
+  seen.add(current);
   const tail: string[] = [];
 
   while (true) {
+    try {
+      const stat = lstatSync(current);
+      if (stat.isSymbolicLink()) {
+        const target = readlinkSync(current).toString();
+        const resolvedTarget = isAbsolute(target) ? target : resolve(dirname(current), target);
+        return realpathWithMissingTail(join(resolvedTarget, ...tail.reverse()), seen);
+      }
+    } catch {
+      // The path may be a missing regular file; continue toward its nearest existing parent.
+    }
+
     try {
       return join(realpathSync(current), ...tail.reverse());
     } catch (error: unknown) {
