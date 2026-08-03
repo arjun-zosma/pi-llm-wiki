@@ -11,7 +11,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
 /**
@@ -315,31 +315,36 @@ export async function exec(
   return result;
 }
 
+function appendPath(base: string, ...parts: string[]): string {
+  if (parts.length === 0) return base;
+  return `${base}${base.endsWith(sep) ? "" : sep}${parts.join(sep)}`;
+}
+
 function realpathWithMissingTail(path: string, seen = new Set<string>()): string {
-  let current = resolve(path);
-  if (seen.has(current)) return current;
-  seen.add(current);
+  let current = path;
   const tail: string[] = [];
 
   while (true) {
     try {
       const stat = lstatSync(current);
       if (stat.isSymbolicLink()) {
+        const symlinkPath = appendPath(realpathSync.native(dirname(current)), basename(current));
+        if (seen.has(symlinkPath)) throw new Error(`Cannot resolve symlink cycle: ${path}`);
+        seen.add(symlinkPath);
         const target = readlinkSync(current).toString();
-        const resolvedTarget = isAbsolute(target) ? target : resolve(dirname(current), target);
-        return realpathWithMissingTail(join(resolvedTarget, ...tail.reverse()), seen);
+        const resolvedTarget = isAbsolute(target) ? target : appendPath(dirname(current), target);
+        return realpathWithMissingTail(appendPath(resolvedTarget, ...tail.reverse()), seen);
       }
-    } catch {
-      // The path may be a missing regular file; continue toward its nearest existing parent.
+    } catch (error: unknown) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
 
     try {
-      return join(realpathSync(current), ...tail.reverse());
+      return appendPath(realpathSync.native(current), ...tail.reverse());
     } catch (error: unknown) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code !== "ENOENT" && code !== "ENOTDIR") return current;
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       const parent = dirname(current);
-      if (parent === current) return current;
+      if (parent === current) throw error;
       tail.push(basename(current));
       current = parent;
     }
@@ -365,18 +370,22 @@ export function isProtectedPath(
   absPath: string,
   paths: VaultPaths,
 ): { protected: boolean; reason?: string } {
-  if (isPathWithin(paths.raw, absPath)) {
-    return {
-      protected: true,
-      reason: "Raw sources are immutable. Use wiki_capture_source to add sources.",
-    };
-  }
-  if (isPathWithin(paths.meta, absPath)) {
-    return {
-      protected: true,
-      reason: "Metadata is auto-generated. Use wiki_rebuild_meta or wiki_log_event instead.",
-    };
-  }
+  try {
+    if (isPathWithin(paths.raw, absPath)) {
+      return {
+        protected: true,
+        reason: "Raw sources are immutable. Use wiki_capture_source to add sources.",
+      };
+    }
+    if (isPathWithin(paths.meta, absPath)) {
+      return {
+        protected: true,
+        reason: "Metadata is auto-generated. Use wiki_rebuild_meta or wiki_log_event instead.",
+      };
+    }
 
-  return { protected: false };
+    return { protected: false };
+  } catch {
+    return { protected: true, reason: "Cannot safely resolve mutation path." };
+  }
 }

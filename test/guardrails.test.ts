@@ -1,5 +1,5 @@
 import { mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import {
@@ -98,6 +98,44 @@ describe("edit guardrails", () => {
     }
   });
 
+  it("preserves parent traversal order through symlink aliases", () => {
+    const root = join(import.meta.dirname, "..", "tmp", `guardrail-${Date.now()}`);
+    const paths = getVaultPaths(root);
+    ensureVaultStructure(paths);
+    const external = join(root, "external");
+    const nestedRaw = join(paths.raw, "nested");
+    mkdirSync(external, { recursive: true });
+    mkdirSync(nestedRaw, { recursive: true });
+    const alias = join(external, "raw-alias");
+    const cycle = join(external, "cycle");
+    mkdirSync(join(external, "cycle-dir"));
+    symlinkSync(nestedRaw, alias, "dir");
+    symlinkSync(`cycle-dir${sep}..${sep}cycle`, cycle);
+    try {
+      expect(mutationBlockReason(`${alias}${sep}..${sep}future.md`, paths)).toContain(
+        "Raw sources",
+      );
+      expect(mutationBlockReason(cycle, paths)).toContain("Cannot safely resolve");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed when an existing path component is not a directory", () => {
+    const root = join(import.meta.dirname, "..", "tmp", `guardrail-${Date.now()}`);
+    const paths = getVaultPaths(root);
+    ensureVaultStructure(paths);
+    const blocker = join(root, "file");
+    writeFileSync(blocker, "not a directory");
+    try {
+      expect(mutationBlockReason(join(blocker, "future.md"), paths)).toContain(
+        "Cannot safely resolve",
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("blocks dangling final symlinks that resolve into guarded vault paths", () => {
     const root = join(import.meta.dirname, "..", "tmp", `guardrail-${Date.now()}`);
     const paths = getVaultPaths(root);
@@ -109,13 +147,16 @@ describe("edit guardrails", () => {
     const external = join(root, "external");
     mkdirSync(external, { recursive: true });
     const rawAlias = join(external, "raw-alias.md");
+    const nestedRawAlias = join(external, "nested-raw-alias.md");
     const indexAlias = join(external, "index-alias.md");
     const pageAlias = join(external, "page-alias.md");
     symlinkSync(join(paths.raw, "future.md"), rawAlias);
+    symlinkSync(rawAlias, nestedRawAlias);
     symlinkSync(join(paths.wiki, "index.md"), indexAlias);
     symlinkSync(join(paths.wiki, "concepts", "future.md"), pageAlias);
     try {
       expect(mutationBlockReason(rawAlias, paths)).toContain("Raw sources");
+      expect(mutationBlockReason(nestedRawAlias, paths)).toContain("Raw sources");
       expect(mutationBlockReason(indexAlias, paths)).toContain("Generated OKF");
       expect(hasWikiMutation({ path: pageAlias }, paths.wiki)).toBe(true);
       writeFileSync(join(paths.dotWiki, "config.json"), "{broken");

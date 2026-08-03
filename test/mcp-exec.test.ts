@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { join } from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import {
   ensureVaultStructure,
   getVaultPaths,
@@ -72,15 +72,45 @@ it("kills descendant processes when a command times out", async () => {
   expect(alive).toBe(false);
 });
 
-it("bounds captured command output", async () => {
-  const result = await createExecApi().exec(
-    process.execPath,
-    ["-e", "process.stdout.write('x'.repeat(17*1024*1024));setTimeout(()=>{},5000)"],
-    { timeout: 5_000 },
-  );
-  expect(result.killed).toBe(true);
-  expect(Buffer.byteLength(result.stdout)).toBeLessThanOrEqual(16 * 1024 * 1024);
+it("does not defer process-group signals after the command settles", async () => {
+  if (process.platform === "win32") return;
+  const originalKill = process.kill.bind(process);
+  const killSpy = vi
+    .spyOn(process, "kill")
+    .mockImplementation((pid, signal) => originalKill(pid, signal));
+  try {
+    const result = await createExecApi().exec(
+      process.execPath,
+      ["-e", "process.on('SIGTERM',()=>process.exit(0));setTimeout(()=>{},5000)"],
+      { timeout: 10 },
+    );
+    expect(result.killed).toBe(true);
+    const forceSignals = () => killSpy.mock.calls.filter(([, signal]) => signal === "SIGKILL");
+    const settledSignals = forceSignals();
+    expect(settledSignals.some(([pid]) => pid < 0)).toBe(true);
+    expect(settledSignals.some(([pid]) => pid > 0)).toBe(false);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(forceSignals()).toHaveLength(settledSignals.length);
+  } finally {
+    killSpy.mockRestore();
+  }
 });
+
+it.each(["stdout", "stderr"] as const)(
+  "bounds captured %s at a complete UTF-8 code point",
+  async (stream) => {
+    const result = await createExecApi().exec(
+      process.execPath,
+      [
+        "-e",
+        `process.on('SIGTERM',()=>{});process.${stream}.write('x'.repeat(16*1024*1024-1)+'€',()=>setTimeout(()=>process.${stream}.write('A'),10));setTimeout(()=>{},5000)`,
+      ],
+      { timeout: 5_000 },
+    );
+    expect(result).toMatchObject({ killed: true, code: 1 });
+    expect(Buffer.byteLength(result[stream])).toBe(16 * 1024 * 1024 - 1);
+  },
+);
 
 it("rejects failed commands and preserves local originals without shell copy", async () => {
   await expect(

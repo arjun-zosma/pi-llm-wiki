@@ -9,7 +9,8 @@ export function createExecApi(): ExecApi {
       return new Promise((resolve) => {
         let killed = false;
         let settled = false;
-        let outputLimit = false;
+        let stdoutLimited = false;
+        let stderrLimited = false;
         let forceTimer: NodeJS.Timeout | undefined;
         let stdout = "";
         let stderr = "";
@@ -34,36 +35,49 @@ export function createExecApi(): ExecApi {
           }
           child.kill(signal);
         };
+        const forceStop = () => {
+          if (forceTimer) clearTimeout(forceTimer);
+          forceTimer = undefined;
+          sendSignal("SIGKILL");
+        };
         const stop = () => {
           if (killed) return;
           killed = true;
           sendSignal("SIGTERM");
-          forceTimer = setTimeout(() => {
-            sendSignal("SIGKILL");
-            forceTimer = undefined;
-          }, 100);
+          if (process.platform !== "win32") forceTimer = setTimeout(forceStop, 100);
         };
-        const appendOutput = (current: string, chunk: string): string => {
+        const appendOutput = (
+          current: string,
+          chunk: string,
+          limited: boolean,
+        ): [string, boolean] => {
+          if (limited) return [current, true];
           const remaining = MAX_OUTPUT_BYTES - Buffer.byteLength(current);
           if (remaining <= 0) {
-            outputLimit = true;
             stop();
-            return current;
+            return [current, true];
           }
           const bytes = Buffer.from(chunk);
-          if (bytes.byteLength <= remaining) return current + chunk;
-          outputLimit = true;
+          if (bytes.byteLength <= remaining) return [current + chunk, false];
           stop();
-          return current + bytes.subarray(0, remaining).toString();
+          let prefix = "";
+          let prefixBytes = 0;
+          for (const char of chunk) {
+            const charBytes = Buffer.byteLength(char);
+            if (prefixBytes + charBytes > remaining) break;
+            prefix += char;
+            prefixBytes += charBytes;
+          }
+          return [current + prefix, true];
         };
 
         child.stdout?.setEncoding("utf8");
         child.stderr?.setEncoding("utf8");
         child.stdout?.on("data", (chunk: string) => {
-          stdout = appendOutput(stdout, chunk);
+          [stdout, stdoutLimited] = appendOutput(stdout, chunk, stdoutLimited);
         });
         child.stderr?.on("data", (chunk: string) => {
-          stderr = appendOutput(stderr, chunk);
+          [stderr, stderrLimited] = appendOutput(stderr, chunk, stderrLimited);
         });
 
         const timer = options.timeout ? setTimeout(stop, options.timeout) : undefined;
@@ -72,11 +86,22 @@ export function createExecApi(): ExecApi {
 
         const finish = (code: number) => {
           if (settled) return;
+          if (forceTimer) {
+            clearTimeout(forceTimer);
+            forceTimer = undefined;
+            if (child.pid) {
+              try {
+                process.kill(-child.pid, "SIGKILL");
+              } catch {
+                // The process group already exited; do not signal the closed child's stale PID.
+              }
+            }
+          }
           cleanup();
           resolve({
             stdout,
             stderr,
-            code: outputLimit ? 1 : killed && code === 0 ? 1 : code,
+            code: stdoutLimited || stderrLimited ? 1 : killed && code === 0 ? 1 : code,
             killed,
           });
         };
@@ -86,7 +111,7 @@ export function createExecApi(): ExecApi {
         function cleanup() {
           settled = true;
           if (timer) clearTimeout(timer);
-          if (forceTimer && !killed) clearTimeout(forceTimer);
+          if (forceTimer) clearTimeout(forceTimer);
           options.signal?.removeEventListener("abort", abort);
         }
 
