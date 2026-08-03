@@ -2,7 +2,11 @@ import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
-import { ensureVaultStructure, getVaultPaths } from "../extensions/llm-wiki/lib/utils.js";
+import {
+  ensureVaultStructure,
+  getVaultPaths,
+  exec as runCommand,
+} from "../extensions/llm-wiki/lib/utils.js";
 import { createExecApi } from "../mcp/exec.js";
 import { captureSourceOperation } from "../mcp/operations.js";
 
@@ -24,6 +28,15 @@ it("returns stdout, stderr, exit code, timeout, and abort state", async () => {
     timeout: 10,
   });
   expect(timedOut.killed).toBe(true);
+  const started = Date.now();
+  const stubborn = await api.exec(
+    process.execPath,
+    ["-e", "process.on('SIGTERM',()=>{});setTimeout(()=>{},5000)"],
+    { timeout: 10 },
+  );
+  expect(Date.now() - started).toBeLessThan(1_000);
+  expect(stubborn).toMatchObject({ killed: true });
+  expect(stubborn.code).not.toBe(0);
 
   const controller = new AbortController();
   const aborted = api.exec(process.execPath, ["-e", "setTimeout(()=>{}, 1000)"], {
@@ -31,6 +44,29 @@ it("returns stdout, stderr, exit code, timeout, and abort state", async () => {
   });
   controller.abort();
   await expect(aborted).resolves.toMatchObject({ killed: true });
+});
+
+it("rejects failed commands and preserves local originals without shell copy", async () => {
+  await expect(
+    runCommand(createExecApi(), process.execPath, ["-e", "process.exit(7)"]),
+  ).rejects.toThrow("Command failed");
+
+  const root = join(import.meta.dirname, "..", "tmp", `mcp-file-failure-${Date.now()}`);
+  roots.push(root);
+  const paths = getVaultPaths(root);
+  ensureVaultStructure(paths);
+  writeFileSync(join(paths.dotWiki, "config.json"), JSON.stringify({ knowledge_format: "legacy" }));
+  const input = join(root, "input.txt");
+  writeFileSync(input, "MCP file body");
+  const failingExec = {
+    exec: async () => ({ stdout: "", stderr: "copy failed", code: 7, killed: false }),
+  };
+  const result = await captureSourceOperation(paths, { filePath: input }, failingExec as never);
+  expect(result.ok).toBe(true);
+  if (!result.ok) return;
+  expect(
+    readFileSync(join(paths.rawSources, result.sourceId, "original", "input.txt"), "utf8"),
+  ).toBe("MCP file body");
 });
 
 it("captures local files with a preserved original and current registry", async () => {

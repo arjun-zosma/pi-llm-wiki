@@ -266,9 +266,8 @@ async function extractWithMarkItDown(
   source: string,
   signal?: AbortSignal,
 ): Promise<string> {
-  if (!(await hasMarkItDown(pi, signal))) return "";
-
   try {
+    if (!(await hasMarkItDown(pi, signal))) return "";
     const mdResult = await exec(
       pi,
       "sh",

@@ -6,3 +6,4 @@ outputs/
 .pi-lens/
 .pi/
 coverage/
+dist/

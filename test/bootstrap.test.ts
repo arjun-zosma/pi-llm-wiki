@@ -111,6 +111,18 @@ describe("bootstrap", () => {
     expect(existsSync(join(paths.wiki, "log.md"))).toBe(false);
   });
 
+  it("does not bootstrap an existing vault when config is missing", () => {
+    const cwd = root();
+    const paths = getVaultPaths(cwd);
+    mkdirSync(join(paths.wiki, "concepts"), { recursive: true });
+    writeFileSync(join(paths.wiki, "concepts", "bad.md"), "malformed\n");
+    const result = bootstrapVault(paths, { topic: "Do not write", mode: "personal" });
+    expect(result.ok).toBe(false);
+    expect(existsSync(join(paths.dotWiki, "config.json"))).toBe(false);
+    expect(existsSync(join(paths.dotWiki, "WIKI_SCHEMA.md"))).toBe(false);
+    expect(existsSync(join(paths.meta, "events.jsonl"))).toBe(false);
+  });
+
   it("does not mutate an existing malformed vault during bootstrap", () => {
     const cwd = root();
     const paths = getVaultPaths(cwd);

@@ -4,7 +4,7 @@
  * LLM Wiki MCP Server
  *
  * Exposes wiki tools over the Model Context Protocol (MCP).
- * Run: node mcp/index.js
+ * Run: node dist/mcp/index.js
  *
  * Environment:
  *   WIKI_ROOT — path to wiki vault (default: auto-detect from cwd)

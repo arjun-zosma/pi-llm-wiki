@@ -6,7 +6,7 @@ import {
   parseKnowledgeDocument,
   parseMarkdownFrontmatter,
 } from "./knowledge-document.js";
-import type { VaultPaths } from "./utils.js";
+import { type VaultPaths, isPathWithin } from "./utils.js";
 
 export type KnowledgeFormat = "legacy" | "okf-0.2";
 
@@ -271,6 +271,7 @@ export function assertWritableVault(paths: VaultPaths): KnowledgeFormat {
 export function isGeneratedOkfPath(path: string, paths: VaultPaths): boolean {
   const state = inspectVaultFormat(paths);
   if (state.blocking || state.knowledgeFormat !== "okf-0.2") return false;
+  if (!isPathWithin(paths.wiki, path)) return false;
   const rel = relative(paths.wiki, resolve(path));
   if (!rel || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return false;
   const parts = rel.split(/[\\/]/);

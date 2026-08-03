@@ -5,6 +5,7 @@ import {
   readdirSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -272,6 +273,38 @@ describe("OKF rebuild integration", () => {
     // Obsolete nested index pruned; concepts/index.md no longer lists nested/
     expect(readFileSync(join(paths.wiki, "concepts/index.md"), "utf8")).not.toContain("nested/");
     expect(() => readFileSync(join(paths.wiki, "concepts/nested/index.md"), "utf8")).toThrow();
+  });
+
+  it("does not prune indexes through symlinked directories", () => {
+    const paths = createVault({ knowledge_format: "okf-0.2" });
+    writeDoc(
+      paths,
+      createKnowledgeDocument("concepts/good.md", { type: "concept", title: "Good" }, "Body."),
+    );
+    const outside = join(paths.root, "outside");
+    mkdirSync(outside, { recursive: true });
+    const victim = join(outside, "index.md");
+    writeFileSync(victim, "outside-owned");
+    symlinkSync(outside, join(paths.wiki, "linked"), "dir");
+    symlinkSync(paths.wiki, join(paths.wiki, "loop"), "dir");
+
+    expect(rebuildMetadata(paths).ok).toBe(true);
+    expect(readFileSync(victim, "utf8")).toBe("outside-owned");
+  });
+
+  it("treats valid JSON primitives and containers as non-blocking event diagnostics", () => {
+    const paths = createVault({ knowledge_format: "okf-0.2" });
+    writeFileSync(
+      join(paths.meta, "events.jsonl"),
+      ["null", "true", "1", '"text"', "[]"].join("\n"),
+    );
+
+    expect(() => rebuildMetadata(paths)).not.toThrow();
+    const result = rebuildMetadata(paths);
+    expect(result.ok).toBe(true);
+    expect(
+      result.diagnostics.filter((diagnostic) => diagnostic.code === "event_invalid_json"),
+    ).toHaveLength(5);
   });
 
   it("merges Markdown and wikilink edges and stores only known targets", () => {

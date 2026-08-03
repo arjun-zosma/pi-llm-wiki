@@ -1,14 +1,16 @@
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   renameSync,
   rmdirSync,
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
 /**
@@ -295,15 +297,52 @@ export function fmtDate(d = new Date()): string {
 /** Narrow exec-only interface shared by Pi and MCP. */
 export type ExecApi = Pick<ExtensionAPI, "exec">;
 
-/** Run a shell command via pi.exec. */
+/** Run a shell command via pi.exec and reject failed or cancelled commands. */
 export async function exec(
   pi: ExecApi,
   command: string,
   args: string[],
   options?: { signal?: AbortSignal; timeout?: number; cwd?: string },
-): Promise<{ stdout: string; stderr: string; code: number }> {
+): Promise<{ stdout: string; stderr: string; code: number; killed: boolean }> {
   const result = await pi.exec(command, args, options ?? {});
+  if (result.killed) throw new Error(`Command timed out or was aborted: ${command}`);
+  if (result.code !== 0) {
+    const detail = result.stderr.trim();
+    throw new Error(
+      `Command failed (${command} exited ${result.code})${detail ? `: ${detail}` : ""}`,
+    );
+  }
   return result;
+}
+
+function realpathWithMissingTail(path: string): string {
+  let current = resolve(path);
+  const tail: string[] = [];
+
+  while (true) {
+    try {
+      return join(realpathSync(current), ...tail.reverse());
+    } catch (error: unknown) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT" && code !== "ENOTDIR") return current;
+      const parent = dirname(current);
+      if (parent === current) return current;
+      tail.push(basename(current));
+      current = parent;
+    }
+  }
+}
+
+/** Check physical containment, resolving existing symlink ancestors. */
+export function isPathWithin(rootPath: string, candidatePath: string): boolean {
+  const relation = relative(
+    realpathWithMissingTail(rootPath),
+    realpathWithMissingTail(candidatePath),
+  );
+  return (
+    relation === "" ||
+    (!isAbsolute(relation) && relation !== ".." && !relation.startsWith(`..${sep}`))
+  );
 }
 
 /** Check if a path is inside a protected directory. */
@@ -311,17 +350,13 @@ export function isProtectedPath(
   absPath: string,
   paths: VaultPaths,
 ): { protected: boolean; reason?: string } {
-  const rawPath = resolve(paths.raw);
-  const metaPath = resolve(paths.meta);
-  const norm = resolve(absPath);
-
-  if (norm.startsWith(`${rawPath}/`) || norm === rawPath) {
+  if (isPathWithin(paths.raw, absPath)) {
     return {
       protected: true,
       reason: "Raw sources are immutable. Use wiki_capture_source to add sources.",
     };
   }
-  if (norm.startsWith(`${metaPath}/`) || norm === metaPath) {
+  if (isPathWithin(paths.meta, absPath)) {
     return {
       protected: true,
       reason: "Metadata is auto-generated. Use wiki_rebuild_meta or wiki_log_event instead.",

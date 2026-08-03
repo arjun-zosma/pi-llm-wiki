@@ -18,6 +18,11 @@ function parsed(content: string, path = "concepts/test.md") {
   return result.document;
 }
 
+function creationFieldsRejectSources(): void {
+  // @ts-expect-error Sources must use the canonical fourth argument.
+  createKnowledgeDocument("concepts/type-check.md", { type: "concept", sources: [] }, "Body.");
+}
+
 describe("KnowledgeDocument", () => {
   it("parses nested OKF values, timestamps as strings, and unknown mappings", () => {
     const input = readFileSync(
@@ -132,6 +137,18 @@ describe("KnowledgeDocument", () => {
     );
     const deep = `---\ntype: concept\nx: ${"[".repeat(33)}0${"]".repeat(33)}\n---\n`;
     expect(parseKnowledgeDocument(deep, "concepts/a.md").diagnostics[0].code).toBe(
+      "frontmatter_limit_depth",
+    );
+  });
+
+  it("limits nesting in explicit YAML mapping keys", () => {
+    const key = `${"[".repeat(33)}0${"]".repeat(33)}`;
+    const result = parseKnowledgeDocument(
+      `---\ntype: concept\n? ${key}\n: value\n---\n`,
+      "concepts/deep-key.md",
+    );
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics.map((diagnostic) => diagnostic.code)).toContain(
       "frontmatter_limit_depth",
     );
   });

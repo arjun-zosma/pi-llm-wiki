@@ -1,4 +1,4 @@
-import { rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it } from "vitest";
@@ -63,6 +63,33 @@ describe("edit guardrails", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+  it("blocks protected raw and meta paths reached through wiki symlink aliases", () => {
+    const root = join(import.meta.dirname, "..", "tmp", `guardrail-${Date.now()}`);
+    const paths = getVaultPaths(root);
+    ensureVaultStructure(paths);
+    writeFileSync(
+      join(paths.dotWiki, "config.json"),
+      JSON.stringify({ knowledge_format: "okf-0.2" }),
+    );
+    mkdirSync(paths.wiki, { recursive: true });
+    symlinkSync(paths.raw, join(paths.wiki, "raw-alias"), "dir");
+    symlinkSync(paths.meta, join(paths.wiki, "meta-alias"), "dir");
+    symlinkSync(paths.wiki, join(paths.wiki, "wiki-alias"), "dir");
+    try {
+      expect(
+        mutationBlockReason(join(paths.wiki, "raw-alias", "sources", "x.md"), paths),
+      ).toContain("Raw sources");
+      expect(mutationBlockReason(join(paths.wiki, "meta-alias", "registry.json"), paths)).toContain(
+        "Metadata",
+      );
+      expect(mutationBlockReason(join(paths.wiki, "wiki-alias", "index.md"), paths)).toContain(
+        "Generated OKF",
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("extracts every file target from an Edit patch", () => {
     const paths = extractMutationPaths({
       patch: [

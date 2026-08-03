@@ -43,6 +43,11 @@ export type KnowledgeValue =
   | KnowledgeValue[]
   | { [key: string]: KnowledgeValue };
 
+export type KnowledgeCreationFields = {
+  type: string;
+  sources?: never;
+} & Omit<Record<string, KnowledgeValue>, "type" | "sources">;
+
 export type KnowledgeSources =
   | { kind: "absent" }
   | { kind: "canonical"; value: Array<Record<string, KnowledgeValue>> }
@@ -209,7 +214,11 @@ function maxDepth(node: unknown, current: number): number {
   if (isMap(node)) {
     let deepest = current + 1;
     for (const item of node.items) {
-      deepest = Math.max(deepest, maxDepth(item.value, current + 1));
+      deepest = Math.max(
+        deepest,
+        maxDepth(item.key, current + 1),
+        maxDepth(item.value, current + 1),
+      );
     }
     return deepest;
   }
@@ -587,7 +596,7 @@ export function serializeKnowledgeDocument(document: KnowledgeDocument): string 
 
 export function createKnowledgeDocument(
   path: string,
-  fields: { type: string } & Record<string, KnowledgeValue>,
+  fields: KnowledgeCreationFields,
   body: string,
   sources?: Array<Record<string, KnowledgeValue>>,
 ): KnowledgeDocument {

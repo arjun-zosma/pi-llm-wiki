@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
   readdirSync,
@@ -15,8 +16,7 @@ import {
   parseKnowledgeDocument,
 } from "./knowledge-document.js";
 import { buildResolvedBacklinks, extractLegacyWikilinks } from "./knowledge-links.js";
-import type { VaultPaths } from "./utils.js";
-import { readJson, writeJson } from "./utils.js";
+import { type VaultPaths, isPathWithin, readJson, writeJson } from "./utils.js";
 import {
   assertWritableVault,
   compareCodePoint,
@@ -316,7 +316,10 @@ function buildLogMarkdown(paths: VaultPaths): string {
     for (const line of raw.split("\n")) {
       if (!line.trim()) continue;
       try {
-        events.push(JSON.parse(line) as WikiEvent);
+        const candidate: unknown = JSON.parse(line);
+        if (candidate && typeof candidate === "object" && !Array.isArray(candidate)) {
+          events.push(candidate as WikiEvent);
+        }
       } catch {
         // skip malformed
       }
@@ -385,10 +388,17 @@ function pruneObsoleteIndexes(paths: VaultPaths, currentIndexes: Map<string, str
     if (!existsSync(dir)) return results;
     for (const entry of readdirSync(dir)) {
       const fullPath = join(dir, entry);
+      let stat: ReturnType<typeof lstatSync>;
+      try {
+        stat = lstatSync(fullPath);
+      } catch {
+        continue;
+      }
+      if (stat.isSymbolicLink()) continue;
       const relPath = relative ? `${relative}/${entry}` : entry;
       if (entry.toLowerCase() === "index.md") {
         results.push(relPath);
-      } else if (statSync(fullPath).isDirectory()) {
+      } else if (stat.isDirectory()) {
         results.push(...walkDir(fullPath, relPath));
       }
     }
@@ -402,10 +412,16 @@ function pruneObsoleteIndexes(paths: VaultPaths, currentIndexes: Map<string, str
     if (!currentPaths.has(indexPath)) {
       const fullPath = join(paths.wiki, indexPath);
       try {
+        if (lstatSync(fullPath).isSymbolicLink() || !isPathWithin(paths.wiki, fullPath)) continue;
         rmSync(fullPath);
         // Try to remove parent dir if empty
         const parentDir = dirname(fullPath);
-        if (existsSync(parentDir) && readdirSync(parentDir).length === 0) {
+        if (
+          !lstatSync(parentDir).isSymbolicLink() &&
+          isPathWithin(paths.wiki, parentDir) &&
+          existsSync(parentDir) &&
+          readdirSync(parentDir).length === 0
+        ) {
           rmSync(parentDir);
         }
       } catch {
@@ -413,10 +429,6 @@ function pruneObsoleteIndexes(paths: VaultPaths, currentIndexes: Map<string, str
       }
     }
   }
-}
-
-function statSync(path: string) {
-  return require("node:fs").statSync(path);
 }
 
 // ===== OKF Projection Renderers =====
@@ -571,7 +583,11 @@ export function buildOkfLog(eventsJsonl: string, path = "meta/events.jsonl"): Ok
 
     let parsed: Record<string, unknown>;
     try {
-      parsed = JSON.parse(line);
+      const candidate: unknown = JSON.parse(line);
+      if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+        throw new Error("event must be a JSON object");
+      }
+      parsed = candidate as Record<string, unknown>;
     } catch {
       diagnostics.push(
         okfDiag("warning", "event_invalid_json", path, `Invalid JSON at line ${i + 1}`),

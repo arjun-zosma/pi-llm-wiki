@@ -1,4 +1,5 @@
 import { mkdirSync, writeFileSync } from "node:fs";
+import { copyFile } from "node:fs/promises";
 import { extname, join } from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { createKnowledgeDocument, serializeKnowledgeDocument } from "./knowledge-document.js";
@@ -118,8 +119,7 @@ function fileCaptureSource(pi: ExecApi, filePath: string, signal?: AbortSignal):
   return {
     needsOriginalDir: true,
     fallbackText: "",
-    preserveOriginal: (packetPath) =>
-      preserveFileOriginal(pi, packetPath, filePath, fileName, content, signal),
+    preserveOriginal: (packetPath) => preserveFileOriginal(packetPath, filePath, fileName, content),
     extract: async () => {
       // Guard: if we hit the generic catch-all extractor, check for binary magic bytes first
       if (extractor.format === "file") {
@@ -212,17 +212,15 @@ function finalizeCapture(
 }
 
 async function preserveFileOriginal(
-  pi: ExecApi,
   packetPath: string,
   filePath: string,
   fileName: string,
   fallbackContent: string,
-  signal?: AbortSignal,
 ): Promise<void> {
   try {
-    await exec(pi, "cp", [filePath, join(packetPath, "original", fileName)], { signal });
+    await copyFile(filePath, join(packetPath, "original", fileName));
   } catch {
-    // If cp fails, preserve whatever text content was available.
+    // If copying fails, preserve whatever text content was available.
     writeFileSync(join(packetPath, "original", fileName), fallbackContent, "utf-8");
   }
 }

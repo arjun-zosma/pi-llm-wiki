@@ -55,7 +55,7 @@ export type BootstrapResult =
 
 export function bootstrapVault(paths: VaultPaths, input: BootstrapInput): BootstrapResult {
   const configPath = join(paths.dotWiki, "config.json");
-  const created = !existsSync(configPath);
+  const created = !existsSync(paths.dotWiki);
   let existing: Record<string, unknown> = {};
 
   if (!created) {
