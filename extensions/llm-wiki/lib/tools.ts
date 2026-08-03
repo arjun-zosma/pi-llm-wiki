@@ -27,6 +27,7 @@ import {
   slugify,
   writeJson,
 } from "./utils.js";
+import { inspectWritableVault } from "./vault-format.js";
 
 /**
  * All LLM Wiki custom tools.
@@ -114,17 +115,48 @@ export function registerWikiBootstrap(pi: ExtensionAPI): void {
       const root = params.root ?? ctx.cwd ?? process.cwd();
       const mode = params.mode || "personal";
       const paths = getVaultPaths(root);
+      const configPath = join(paths.dotWiki, "config.json");
 
       ensureVaultStructure(paths);
 
-      const config = {
+      // Read existing config if present; preserve knowledge_format (including absence for old vaults)
+      const config: Record<string, unknown> = {
         name: params.topic,
         mode,
         topic: params.topic,
         created: fmtDate(),
         version: "1.0",
       };
-      writeJson(join(paths.dotWiki, "config.json"), config);
+      if (existsSync(configPath)) {
+        try {
+          const existing = readJson<Record<string, unknown>>(configPath, {});
+          // Preserve existing knowledge_format exactly (including absence)
+          if (existing.knowledge_format !== undefined) {
+            // Validate explicit mode
+            if (existing.knowledge_format !== "legacy" && existing.knowledge_format !== "okf-0.2") {
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: `Invalid knowledge_format in existing config: ${JSON.stringify(existing.knowledge_format)}`,
+                  },
+                ],
+                details: { error: "config_invalid_knowledge_format" } as Record<string, unknown>,
+                isError: true,
+              };
+            }
+            config.knowledge_format = existing.knowledge_format;
+          }
+          // Preserve existing created date
+          if (existing.created) config.created = existing.created;
+        } catch {
+          // Malformed JSON — treat as new vault
+        }
+      } else {
+        // New vault — persist OKF mode
+        config.knowledge_format = "okf-0.2";
+      }
+      writeJson(configPath, config);
 
       const schema = [
         "# LLM Wiki Schema",
@@ -159,14 +191,32 @@ export function registerWikiBootstrap(pi: ExtensionAPI): void {
         "",
         "## Linking Style",
         "",
-        "- Internal: [[folder/page-name]]",
-        "- Citation: [[sources/SRC-YYYY-MM-DD-NNN]]",
+        "- New internal links: [label](/folder/page.md)",
+        "- Legacy readable links: [[folder/page]]",
+        "- Source citation: [source](/sources/SRC-YYYY-MM-DD-NNN.md)",
         "",
       ].join("\n");
       writeFileSync(join(paths.dotWiki, "WIKI_SCHEMA.md"), schema, "utf-8");
 
-      rebuildMetadata(paths);
+      // Append event BEFORE rebuild so log contains bootstrap immediately
       appendEvent(paths, { kind: "bootstrap", topic: params.topic, mode });
+      const projection = rebuildMetadata(paths);
+      if (!projection.ok) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `✅ Wiki bootstrapped but projection rebuild had issues: ${projection.diagnostics.map((d) => `${d.code}: ${d.message}`).join("; ")}`,
+            },
+          ],
+          details: {
+            root,
+            mode,
+            topic: params.topic,
+            diagnostics: projection.diagnostics,
+          } as Record<string, unknown>,
+        };
+      }
 
       return {
         content: [
@@ -526,11 +576,16 @@ export function registerWikiEnsurePage(pi: ExtensionAPI, runtime?: Runtime): voi
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const paths = getPaths(ctx.cwd);
-      const vaultCheck = requireVault(paths);
+      const vaultCheck = inspectWritableVault(paths);
       if (!vaultCheck.ok) {
         return {
-          content: [{ type: "text", text: vaultCheck.reason }],
-          details: { error: vaultCheck.reason } as Record<string, unknown>,
+          content: [
+            { type: "text", text: `Wiki vault error: ${vaultCheck.diagnostics[0].message}` },
+          ],
+          details: {
+            error: vaultCheck.diagnostics[0].code,
+            diagnostics: vaultCheck.diagnostics,
+          } as Record<string, unknown>,
           isError: true,
         };
       }
@@ -803,11 +858,16 @@ export function registerWikiLint(pi: ExtensionAPI, runtime?: Runtime): void {
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const paths = getPaths(ctx.cwd);
-      const vaultCheck = requireVault(paths);
+      const vaultCheck = inspectWritableVault(paths);
       if (!vaultCheck.ok) {
         return {
-          content: [{ type: "text", text: vaultCheck.reason }],
-          details: { error: vaultCheck.reason } as Record<string, unknown>,
+          content: [
+            { type: "text", text: `Wiki vault error: ${vaultCheck.diagnostics[0].message}` },
+          ],
+          details: {
+            error: vaultCheck.diagnostics[0].code,
+            diagnostics: vaultCheck.diagnostics,
+          } as Record<string, unknown>,
           isError: true,
         };
       }
@@ -1056,11 +1116,16 @@ export function registerWikiRebuildMeta(pi: ExtensionAPI, runtime?: Runtime): vo
     parameters: Type.Object({}),
     async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
       const paths = getPaths(ctx.cwd);
-      const vaultCheck = requireVault(paths);
+      const vaultCheck = inspectWritableVault(paths);
       if (!vaultCheck.ok) {
         return {
-          content: [{ type: "text", text: vaultCheck.reason }],
-          details: { error: vaultCheck.reason } as Record<string, unknown>,
+          content: [
+            { type: "text", text: `Wiki vault error: ${vaultCheck.diagnostics[0].message}` },
+          ],
+          details: {
+            error: vaultCheck.diagnostics[0].code,
+            diagnostics: vaultCheck.diagnostics,
+          } as Record<string, unknown>,
           isError: true,
         };
       }
@@ -1072,8 +1137,11 @@ export function registerWikiRebuildMeta(pi: ExtensionAPI, runtime?: Runtime): vo
         started:
           "\u{1F9E0} LLM Wiki: metadata rebuild started in the background — the result will be reported when it completes.",
         work: async () => {
-          rebuildMetadata(paths);
-          appendEvent(paths, { kind: "rebuild_meta" });
+          const result = rebuildMetadata(paths);
+          // No rebuild_meta event — rebuild is a projection, not an authoritative mutation
+          if (!result.ok) {
+            return `⚠️ LLM Wiki: rebuild had issues — ${result.diagnostics.map((d) => `${d.code}: ${d.message}`).join("; ")}`;
+          }
           const registry = readJson<Registry>(join(paths.meta, "registry.json"), {
             version: "1.0",
             last_updated: "",
@@ -1108,11 +1176,16 @@ export function registerWikiReindexEmbeddings(pi: ExtensionAPI, runtime?: Runtim
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const paths = getPaths(ctx.cwd);
-      const vaultCheck = requireVault(paths);
+      const vaultCheck = inspectWritableVault(paths);
       if (!vaultCheck.ok) {
         return {
-          content: [{ type: "text", text: vaultCheck.reason }],
-          details: { error: vaultCheck.reason } as Record<string, unknown>,
+          content: [
+            { type: "text", text: `Wiki vault error: ${vaultCheck.diagnostics[0].message}` },
+          ],
+          details: {
+            error: vaultCheck.diagnostics[0].code,
+            diagnostics: vaultCheck.diagnostics,
+          } as Record<string, unknown>,
           isError: true,
         };
       }
@@ -1166,11 +1239,16 @@ export function registerWikiLogEvent(pi: ExtensionAPI): void {
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const paths = getPaths(ctx.cwd);
-      const vaultCheck = requireVault(paths);
+      const vaultCheck = inspectWritableVault(paths);
       if (!vaultCheck.ok) {
         return {
-          content: [{ type: "text", text: vaultCheck.reason }],
-          details: { error: vaultCheck.reason } as Record<string, unknown>,
+          content: [
+            { type: "text", text: `Wiki vault error: ${vaultCheck.diagnostics[0].message}` },
+          ],
+          details: {
+            error: vaultCheck.diagnostics[0].code,
+            diagnostics: vaultCheck.diagnostics,
+          } as Record<string, unknown>,
           isError: true,
         };
       }

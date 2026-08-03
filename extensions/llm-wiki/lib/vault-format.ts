@@ -1,5 +1,5 @@
-import { readFileSync, readdirSync, statSync } from "node:fs";
-import { normalize } from "node:path";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { normalize, relative } from "node:path";
 import { posix } from "node:path";
 import {
   type KnowledgeDiagnostic,
@@ -179,6 +179,42 @@ function collectMarkdownFiles(dir: string, baseDir: string): string[] {
     // Skip unreadable directories
   }
   return files;
+}
+
+/** Validate vault is writable: exists, valid mode, no blocking version mismatch. */
+export function inspectWritableVault(
+  paths: VaultPaths,
+): { ok: true; format: KnowledgeFormat } | { ok: false; diagnostics: KnowledgeDiagnostic[] } {
+  // Check vault exists
+  if (!existsSync(paths.dotWiki)) {
+    return {
+      ok: false,
+      diagnostics: [
+        diag(
+          "error",
+          "config_invalid_knowledge_format",
+          paths.dotWiki,
+          "Wiki vault not found. Run wiki_bootstrap first.",
+        ),
+      ],
+    };
+  }
+  const state = inspectVaultFormat(paths);
+  if (state.blocking) {
+    return { ok: false, diagnostics: state.diagnostics };
+  }
+  return { ok: true, format: state.knowledgeFormat };
+}
+
+/** Check if path is a generated OKF reserved file (mode-aware). */
+export function isGeneratedOkfPath(path: string, paths: VaultPaths): boolean {
+  const state = inspectVaultFormat(paths);
+  if (state.knowledgeFormat !== "okf-0.2") return false;
+  const rel = relative(paths.wiki, path);
+  if (!rel) return false;
+  const parts = rel.split("/");
+  const name = parts.at(-1)?.toLowerCase();
+  return name === "index.md" || (parts.length === 1 && name === "log.md");
 }
 
 export function discoverKnowledgeDocuments(paths: VaultPaths): DiscoveryResult {

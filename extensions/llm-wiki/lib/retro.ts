@@ -11,6 +11,7 @@ import {
 import { appendEvent, rebuildMetadataLight } from "./metadata.js";
 import type { Runtime } from "./runtime.js";
 import { type VaultPaths, fmtDate, resolveVaultPaths } from "./utils.js";
+import { inspectWritableVault } from "./vault-format.js";
 
 // ─── Public API ────────────────────────────────────────
 
@@ -126,15 +127,19 @@ export function registerWikiRetro(pi: ExtensionAPI, runtime?: Runtime): void {
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const paths = resolveVaultPaths(ctx.cwd ?? process.cwd());
 
-      if (!existsSync(join(paths.dotWiki, "config.json"))) {
+      const vaultCheck = inspectWritableVault(paths);
+      if (!vaultCheck.ok) {
         return {
           content: [
             {
               type: "text",
-              text: "No wiki vault found at this location. Initialize one with wiki_bootstrap first.",
+              text: `Wiki vault error: ${vaultCheck.diagnostics[0].message}`,
             },
           ],
-          details: { error: "no_vault" } as Record<string, unknown>,
+          details: {
+            error: vaultCheck.diagnostics[0].code,
+            diagnostics: vaultCheck.diagnostics,
+          } as Record<string, unknown>,
           isError: true,
         };
       }

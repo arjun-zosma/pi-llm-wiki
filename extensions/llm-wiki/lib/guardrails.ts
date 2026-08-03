@@ -5,6 +5,7 @@ import { scheduleReindex } from "./indexing.js";
 import { rebuildMetadataLight } from "./metadata.js";
 import type { Runtime } from "./runtime.js";
 import { isProtectedPath, resolveVaultPaths } from "./utils.js";
+import { isGeneratedOkfPath } from "./vault-format.js";
 
 /**
  * Guardrails and auto-rebuild hooks for the LLM Wiki extension.
@@ -183,7 +184,7 @@ export function hasWikiMutation(input: unknown, wikiPath: string): boolean {
 
 /** Install guardrails on the extension API. */
 export function installGuardrails(pi: ExtensionAPI, runtime?: Runtime): void {
-  // Block direct edits to raw/ and meta/
+  // Block direct edits to raw/ and meta/, plus OKF generated projections
   pi.on("tool_call", async (event) => {
     if (isToolCallEventType("write", event)) {
       const path = event.input.path as string;
@@ -191,6 +192,13 @@ export function installGuardrails(pi: ExtensionAPI, runtime?: Runtime): void {
       const check = isProtectedPath(path, paths);
       if (check.protected) {
         return { block: true, reason: check.reason };
+      }
+      if (isGeneratedOkfPath(path, paths)) {
+        return {
+          block: true,
+          reason:
+            "Generated OKF indexes and log are read-only. Use wiki_rebuild_meta or the page-producing tool that owns the source mutation.",
+        };
       }
     }
 
@@ -206,6 +214,13 @@ export function installGuardrails(pi: ExtensionAPI, runtime?: Runtime): void {
         const check = isProtectedPath(path, paths);
         if (check.protected) {
           return { block: true, reason: check.reason };
+        }
+        if (isGeneratedOkfPath(path, paths)) {
+          return {
+            block: true,
+            reason:
+              "Generated OKF indexes and log are read-only. Use wiki_rebuild_meta or the page-producing tool that owns the source mutation.",
+          };
         }
       }
     }
