@@ -1,5 +1,4 @@
 import { readFileSync, writeFileSync } from "node:fs";
-import { posix } from "node:path";
 import { type Document, isAlias, isMap, isScalar, isSeq, parseAllDocuments, stringify } from "yaml";
 
 export const FRONTMATTER_MAX_BYTES = 128 * 1024;
@@ -177,13 +176,6 @@ function classifySources(raw: KnowledgeValue | undefined): KnowledgeSources {
     }
   }
   return { kind: "unknown-shape", value: raw };
-}
-
-function countDepth(node: unknown, current: number): number {
-  if (isMap(node) || isSeq(node)) {
-    return current + 1;
-  }
-  return current;
 }
 
 function hasAlias(node: unknown): boolean {

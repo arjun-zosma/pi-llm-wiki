@@ -10,13 +10,9 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
-import {
-  type KnowledgeDiagnostic,
-  type KnowledgeDocument,
-  parseKnowledgeDocument,
-} from "./knowledge-document.js";
-import { buildResolvedBacklinks, extractLegacyWikilinks } from "./knowledge-links.js";
-import { type VaultPaths, isPathWithin, readJson, writeJson } from "./utils.js";
+import type { KnowledgeDiagnostic, KnowledgeDocument } from "./knowledge-document.js";
+import { buildResolvedBacklinks } from "./knowledge-links.js";
+import { type VaultPaths, isPathWithin, readJson } from "./utils.js";
 import {
   assertWritableVault,
   compareCodePoint,

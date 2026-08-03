@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import type { Api, Model } from "@mariozechner/pi-ai";
@@ -8,8 +8,8 @@ import {
   type KnowledgeDiagnostic,
   type KnowledgeDocument,
   createKnowledgeDocument,
-  parseKnowledgeDocument,
   patchKnowledgeDocument,
+  readKnowledgeDocumentFile,
   serializeKnowledgeDocument,
   writeKnowledgeDocumentFile,
 } from "./knowledge-document.js";
@@ -243,22 +243,10 @@ export function commitSynthesis(
     throw error;
   }
 
-  // Source page: if existing skeleton is malformed, fail before creating entity/concept pages.
-  if (existsSync(result.sourcePage)) {
-    const existingContent = readFileSync(result.sourcePage, "utf-8");
-    const parseResult = parseKnowledgeDocument(existingContent, `sources/${sourceId}.md`);
-    if (!parseResult.ok) {
-      return { ok: false, sourceId, diagnostics: parseResult.diagnostics };
-    }
-  }
-
   // Patch existing documents so unknown fields, legacy sources, and titles survive.
   let sourceDocument: KnowledgeDocument;
   if (existsSync(result.sourcePage)) {
-    const parsed = parseKnowledgeDocument(
-      readFileSync(result.sourcePage, "utf8"),
-      `sources/${sourceId}.md`,
-    );
+    const parsed = readKnowledgeDocumentFile(result.sourcePage, `sources/${sourceId}.md`);
     if (!parsed.ok) return { ok: false, sourceId, diagnostics: parsed.diagnostics };
     sourceDocument = patchKnowledgeDocument(parsed.document, {
       fields: { status: "ingested", updated: date },

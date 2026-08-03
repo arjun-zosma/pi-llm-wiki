@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { KnowledgeDiagnostic } from "./knowledge-document.js";
 import type { Registry } from "./metadata.js";

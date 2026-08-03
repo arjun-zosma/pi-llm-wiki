@@ -1,5 +1,5 @@
 import { type ChildProcessWithoutNullStreams, execFileSync, spawn } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { ensureVaultStructure, getVaultPaths } from "../extensions/llm-wiki/lib/utils.js";
@@ -56,7 +56,10 @@ it("starts the published MCP command, exposes five tools, and invokes operations
   root = mkdtempSync(join(rootDir, "tmp", "mcp-package-"));
   const paths = getVaultPaths(root);
   ensureVaultStructure(paths);
-  writeFileSync(join(paths.dotWiki, "config.json"), JSON.stringify({ knowledge_format: "legacy" }));
+  writeFileSync(
+    join(paths.dotWiki, "config.json"),
+    `${JSON.stringify({ knowledge_format: "legacy" }, null, 2)}\n`,
+  );
 
   const [runtime, script] = command.split(" ");
   const child = spawn(runtime, [script], {

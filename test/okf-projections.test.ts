@@ -374,7 +374,6 @@ describe("OKF rebuild integration", () => {
     rebuildMetadata(paths);
     const beforeRegistry = JSON.parse(readFileSync(join(paths.meta, "registry.json"), "utf8"));
     const beforeBacklinks = JSON.parse(readFileSync(join(paths.meta, "backlinks.json"), "utf8"));
-    const beforeWikiIndex = readFileSync(join(paths.wiki, "index.md"), "utf8");
     const beforeWikiLog = readFileSync(join(paths.wiki, "log.md"), "utf8");
 
     // Corrupt root index with unsupported version

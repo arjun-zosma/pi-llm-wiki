@@ -53,10 +53,12 @@ it("kills descendant processes when a command times out", async () => {
   const marker = join(root, "child.pid");
   const script = [
     "const {spawn}=require('node:child_process')",
-    `const fs=require('node:fs');const child=spawn(process.execPath,['-e',\"process.on('SIGTERM',()=>{});setTimeout(()=>{},5000)\"],{stdio:'ignore'});fs.writeFileSync(${JSON.stringify(marker)},String(child.pid))`,
+    "const fs=require('node:fs');const child=spawn(process.execPath,['-e',\"process.on('SIGTERM',()=>{});setTimeout(()=>{},5000)\"],{stdio:'ignore'});fs.writeFileSync(process.argv[1],String(child.pid))",
     "setTimeout(()=>{},5000)",
   ].join(";");
-  const result = await createExecApi().exec(process.execPath, ["-e", script], { timeout: 100 });
+  const result = await createExecApi().exec(process.execPath, ["-e", script, marker], {
+    timeout: 100,
+  });
   expect(result, JSON.stringify(result)).toMatchObject({ killed: true });
   const childPid = Number(readFileSync(marker, "utf8"));
   let alive = true;
@@ -99,14 +101,11 @@ it("does not defer process-group signals after the command settles", async () =>
 it.each(["stdout", "stderr"] as const)(
   "bounds captured %s at a complete UTF-8 code point",
   async (stream) => {
-    const result = await createExecApi().exec(
-      process.execPath,
-      [
-        "-e",
-        `process.on('SIGTERM',()=>{});process.${stream}.write('x'.repeat(16*1024*1024-1)+'€',()=>setTimeout(()=>process.${stream}.write('A'),10));setTimeout(()=>{},5000)`,
-      ],
-      { timeout: 5_000 },
-    );
+    const script =
+      stream === "stdout"
+        ? "process.on('SIGTERM',()=>{});process.stdout.write('x'.repeat(16*1024*1024-1)+'€',()=>setTimeout(()=>process.stdout.write('A'),10));setTimeout(()=>{},5000)"
+        : "process.on('SIGTERM',()=>{});process.stderr.write('x'.repeat(16*1024*1024-1)+'€',()=>setTimeout(()=>process.stderr.write('A'),10));setTimeout(()=>{},5000)";
+    const result = await createExecApi().exec(process.execPath, ["-e", script], { timeout: 5_000 });
     expect(result).toMatchObject({ killed: true, code: 1 });
     expect(Buffer.byteLength(result[stream])).toBe(16 * 1024 * 1024 - 1);
   },
