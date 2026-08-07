@@ -7,7 +7,6 @@ import {
   readdirSync,
   renameSync,
   rmSync,
-  statSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
@@ -367,12 +366,10 @@ type EventSourceRead =
 
 function readEventSource(filePath: string, diagnosticPath = "meta/events.jsonl"): EventSourceRead {
   try {
-    if (!statSync(filePath).isFile()) {
-      throw new Error("event source is not a regular file");
-    }
     return { available: true, content: readFileSync(filePath, "utf8") };
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
+    // ENOENT = missing; ENOTDIR/EISDIR = not a regular file (FreeBSD dir hazard); else unreadable
     const diagnosticCode = code === "ENOENT" ? "event_source_missing" : "event_source_unreadable";
     const message =
       diagnosticCode === "event_source_missing"
