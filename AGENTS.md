@@ -4,7 +4,7 @@ Instructions for AI agents working on this codebase.
 
 ## Project
 
-`@zosmaai/pi-llm-wiki` — A pi package that implements Andrej Karpathy's LLM Wiki pattern as a self-maintaining knowledge base.
+`@zosmaai/pi-llm-wiki` — A package that implements Andrej Karpathy's LLM Wiki pattern as a self-maintaining knowledge base. It loads under **two hosts**: pi (`@mariozechner/pi-coding-agent`) and oh-my-pi (`omp`).
 
 ## Tech Stack
 
@@ -19,12 +19,13 @@ Instructions for AI agents working on this codebase.
 ```
 ├── extensions/llm-wiki/     # TypeScript extension (12 tools + guardrails)
 │   ├── index.ts             # Entry point
-│   └── lib/                 # tools.ts, metadata.ts, guardrails.ts, utils.ts, source-packet.ts
+│   └── lib/                 # tools.ts, metadata.ts, guardrails.ts, utils.ts, source-packet.ts, host.ts
 ├── skills/llm-wiki/         # SKILL.md + templates
-├── prompts/                 # 8 slash command templates
+├── prompts/                 # slash command templates (source of truth; pi reads these)
+├── commands/                # generated mirror of prompts/ (oh-my-pi reads these) — do not hand-edit
 ├── test/                    # Vitest tests
 ├── docs/                    # Documentation
-└── scripts/                 # release.js
+└── scripts/                 # release.js, build-mcp.js, build-commands.js
 ```
 
 ## Conventions
@@ -37,6 +38,8 @@ Instructions for AI agents working on this codebase.
 - Source IDs: `SRC-YYYY-MM-DD-NNN`
 - Page filenames: `kebab-case.md`
 - Wikilinks: folder-qualified, e.g. `[[concepts/retrieval-augmented-generation]]`
+- Never resolve `.pi` / `.omp` config paths by hand — go through `lib/host.ts`
+- After editing anything in `prompts/`, run `pnpm build:commands` (a test enforces parity)
 
 ## Testing
 

@@ -7,6 +7,10 @@
     "pi-package",
     "pi-extension",
     "pi-skill",
+    "omp",
+    "oh-my-pi",
+    "omp-plugin",
+    "omp-extension",
     "llm-wiki",
     "karpathy",
     "knowledge-base",
@@ -37,6 +41,7 @@
     "extensions",
     "skills",
     "prompts",
+    "commands",
     "scripts/migrate-llm-wiki.js",
     "mcp",
     "dist",
@@ -53,8 +58,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
+    "build:commands": "node scripts/build-commands.js",
     "build:mcp": "node scripts/build-mcp.js",
-    "prepack": "node scripts/build-mcp.js",
+    "prepack": "node scripts/build-commands.js && node scripts/build-mcp.js",
     "typecheck": "tsc --noEmit",
     "lint": "biome check .",
     "lint:fix": "biome check --apply .",
@@ -71,6 +77,9 @@
     "mcpservers": {
       "llm-wiki": "node ./dist/mcp/index.js"
     }
+  },
+  "omp": {
+    "extensions": ["./extensions/llm-wiki/index.ts"]
   },
   "peerDependencies": {
     "@mariozechner/pi-coding-agent": "*",
