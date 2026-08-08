@@ -35,7 +35,7 @@
 - Build a deterministic benchmark runner for the current heuristic recall path and record baseline metrics.
 - Curate 50–100 sanitized queries representing the approved query categories, including dense-retrieval false positives and multilingual cases present in the corpus.
 - Raise development and CI toolchains to Node.js 22 and a TypeScript version compatible with the pinned QMD peer range.
-- Pin and contract-test `@tobilu/qmd` 2.6.3, including the SDK calls required by all four retrieval modes.
+- Pin and contract-test the published `@tobilu/qmd` 2.5.3 package, including the SDK calls required by all four retrieval modes.
 - Add clean-install/native-package smoke coverage for the supported release platforms.
 - Verify lexical QMD operation without model download and document default model cache/download expectations.
 
@@ -56,7 +56,7 @@
 **Dependencies:**
 - Approved design spec.
 - Access to representative queries that can be sanitized before entering the repository.
-- QMD 2.6.3 package and supported native binaries remaining available.
+- QMD 2.5.3 package and supported native binaries remaining available.
 
 **Verification:**
 - Existing typecheck, lint, and test suites pass on Node.js 22.
