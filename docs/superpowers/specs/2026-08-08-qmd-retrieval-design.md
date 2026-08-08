@@ -128,29 +128,45 @@ Pi tool, MCP, and automatic recall adapters
 
 - `.llm-wiki/wiki/**/*.md` remains authoritative, user-editable knowledge.
 - `.llm-wiki/raw/**` remains immutable source material.
-- `.llm-wiki/meta/qmd.sqlite` is generated, extension-owned, and rebuildable.
+- `.llm-wiki/meta/qmd/**` is generated, extension-owned, and rebuildable. It contains the validated document mirror, path manifest, and complete QMD database artifacts.
 - QMD model files remain in QMD's standard local cache.
-- `.llm-wiki/meta/recall-feedback.jsonl` is durable, append-only local state and is not part of an OKF export.
-- `.llm-wiki/meta/recall-feedback.json` is a rebuildable aggregate projection.
+- Recall feedback uses the existing authoritative `.llm-wiki/meta/events.jsonl` stream. `recall_feedback` events have `visibility: internal`, so generated human-readable logs omit them.
+- `.llm-wiki/meta/recall-feedback.json` is a rebuildable aggregate projection of valid internal feedback events.
 
-The existing guardrails for `meta/**` apply to the QMD index and feedback files. Only extension code may modify them.
+The existing guardrails for `meta/**` apply. Only extension code may modify QMD artifacts, feedback events, or projections. Full-vault backups retain feedback through `events.jsonl`; OKF-only exports exclude it, matching existing event-stream behavior. The implementation must update `docs/architecture.md` and the OKF ownership documentation to describe internal events and the feedback projection.
+
+Feedback appends go through the existing `appendEvent` service as one append operation. This release upgrades that service to serialize writers with a per-vault in-process queue plus an extension-owned `meta/events.lock` acquired by exclusive file creation. The lock records writer ID and acquisition time; a writer may recover a lock older than 30 seconds only after confirming the recorded local process no longer exists. Implicit events wait at most 250 ms and may be dropped with a diagnostic; explicit corrections and conflict choices wait up to 2 seconds and return an error without mutating knowledge if the lock remains busy. Replay ignores events for deleted pages. There is no automatic retention or compaction in this release. If the event source is unreadable or malformed, feedback adjustments are disabled, lint reports the corruption, and the last generated projection is preserved rather than guessed or rewritten.
 
 ### One store per vault
 
-Each personal or project vault gets an independent QMD store under its own `meta/` directory. This prevents a project index from copying personal content and keeps index invalidation local to the vault that changed.
+Each personal or project vault gets an independent QMD store under its own `meta/qmd/` directory. This prevents a project index from copying personal content and keeps index invalidation local to the vault that changed.
 
 Automatic recall searches only the active project vault when one exists, matching the current contamination guard. Outside a project vault, it searches the personal vault. Explicit `wiki_recall` searches both applicable vaults in parallel, deduplicates by page ID with project precedence, and combines the ranked lists using rank-based fusion rather than assuming raw scores are comparable across stores.
 
-### QMD collections
+Every vault has a stable UUID in `.llm-wiki/config.json` (`vault_id`). Bootstrap creates it; first QMD indexing backfills it once for existing vaults while preserving all other configuration. Feedback and layered result identities use `(vault_id, page_id)`, so identical personal and project page IDs never share signals.
 
-Each store defines two logical collections over `.llm-wiki/wiki/`:
+### Validated QMD mirror and collections
 
-- **canonical:** concepts, entities, analyses, syntheses, requirements, skills, and cases
-- **evidence:** sources and observations
+QMD must never scan authoritative `wiki/**` directly. Before `store.update`, pi-llm-wiki parses changed pages through the shared `KnowledgeDocument` layer and writes only valid documents into a generated mirror:
 
-Unknown page types remain searchable and default to evidence unless configured as canonical. Generated reserved files such as `index.md` and `log.md` are excluded.
+```text
+meta/qmd/documents/
+├── canonical/<folder-qualified-id>.md
+└── evidence/<folder-qualified-id>.md
+```
 
-Collection context tells QMD that canonical pages contain reusable conclusions while evidence pages contain provenance and historical observations. pi-llm-wiki still validates every result against parsed page metadata; collection membership alone does not make a page authoritative.
+`meta/qmd/manifest.json` maps each mirror path to its original absolute path, vault ID, page ID, content hash, and role. Malformed pages and reserved generated `index.md`/`log.md` files have no mirror entry, so they cannot influence QMD candidate generation, expansion, or reranking. Removing or invalidating an authoritative page removes its mirror copy before the next QMD update.
+
+The store defines two non-overlapping filesystem collections through QMD's supported `path` plus `pattern` configuration:
+
+```ts
+collections: {
+  canonical: { path: "<meta>/qmd/documents/canonical", pattern: "**/*.md" },
+  evidence: { path: "<meta>/qmd/documents/evidence", pattern: "**/*.md" },
+}
+```
+
+Unknown page types default to the evidence mirror. Collection context tells QMD that canonical pages contain reusable conclusions while evidence pages contain provenance and historical observations. Every QMD result is mapped back through the manifest and parsed metadata before it enters memory assembly.
 
 ### Shared service boundary
 
@@ -160,13 +176,30 @@ Conceptual interfaces:
 
 ```ts
 type RetrievalMode = "lexical" | "hybrid" | "adaptive" | "quality";
+type ConflictRelation = "supersedes" | "qualifies" | "applies_under";
+
+type ConflictResolution = {
+  id: string;
+  vaultId: string;
+  selectedPageId: string;
+  otherPageId: string;
+  relation: ConflictRelation;
+  scope?: string;
+  status: "active";
+  decidedBy: "user";
+  decidedAt: string;
+  replaces?: string;
+};
 
 type MemoryCandidate = {
   vault: "project" | "personal";
+  vaultId: string;
   pageId: string;
   path: string;
   heading?: string;
   excerpt: string;
+  qmdRank: number;
+  qmdScore?: number;
   score: number;
   role: "canonical" | "evidence";
   status: "draft" | "stable" | "deprecated";
@@ -224,7 +257,7 @@ Recommended body sections are:
 ## Related
 ```
 
-The existing OKF-compatible metadata remains authoritative for type, title, description, sources, generation, verification, status, and staleness. pi-llm-wiki adds one optional preserved extension field for typed card relationships:
+The existing OKF-compatible metadata remains authoritative for type, title, description, sources, generation, verification, status, and staleness. pi-llm-wiki defines `relations` as an optional profile extension:
 
 ```yaml
 relations:
@@ -232,7 +265,7 @@ relations:
     type: contradicts
 ```
 
-Allowed first-release relationship types are:
+Each relation is a mapping with exactly `target`, `type`, and optional `scope`. `target` is a normalized folder-qualified page ID without a heading or block fragment. `scope` is required for `applies_under` and forbidden for the other first-release types. Allowed types are:
 
 - `supports`
 - `contradicts`
@@ -242,19 +275,21 @@ Allowed first-release relationship types are:
 - `derived_from`
 - `related_to`
 
-Only the first six affect evidence or conflict expansion. `related_to` remains a browsing link and receives no automatic inclusion privilege.
+The shared parser preserves the extension, validator checks its shape, serializer round-trips it, lint resolves each target and reports duplicates, self-links, missing targets, invalid scope use, and unknown relation types. Unknown imported relation types are preserved but inert. The generated relation adjacency map deduplicates equivalent edges.
 
-Evidence links should target the exact source page and, when available, a heading or Obsidian block anchor. Backlink generation may normalize the page target while preserving the anchor in Markdown.
+A typed relation must also have an ordinary Markdown link to the same page in the body. The Markdown link keeps Obsidian and plain OKF consumers navigable; `relations` supplies machine-readable semantics. If the body link is absent, lint reports `relation_missing_body_link` and the relation does not participate in expansion. Heading and Obsidian block anchors belong on the body link; relationship identity remains page-level. Backlinks derive one page edge from the Markdown link and attach the validated relation type without creating a duplicate edge.
+
+Only `supports`, `contradicts`, `qualifies`, `supersedes`, `applies_under`, and `derived_from` affect evidence or conflict expansion. `related_to` remains a browsing link and receives no automatic inclusion privilege. Active user resolution records take precedence when a declared relation and a later resolution disagree, while both remain visible for audit.
 
 ### Unpromoted evidence
 
-When no canonical card exists, recall may return the strongest source excerpt as **unpromoted evidence**. It must not be presented as an established conclusion. Repeated use can place it in a card-promotion queue.
+When no canonical card exists, recall may return the strongest source excerpt as **unpromoted evidence**. It must not be presented as an established conclusion. Promotion automation is outside this design; usage and corrections may inform a separately specified future workflow.
 
 ## Indexing and Reindexing
 
 ### Normal write path
 
-After a successful metadata rebuild for changed Markdown pages, the indexing coordinator calls QMD's incremental update. Stale embeddings are generated in the background. A write remains successful even if QMD indexing fails; the last valid index stays available and status reports the failure.
+After a successful metadata rebuild, the indexing coordinator parses changed Markdown pages and atomically updates their validated mirror copies and manifest entries. It then calls QMD's incremental update against the mirror. Stale embeddings are generated in the background. A write remains successful even if mirror or QMD indexing fails; the last valid QMD index stays available and status reports the authoritative page hash that has not yet been indexed. A malformed page never receives or retains a mirror copy for its invalid content.
 
 ### Explicit tool
 
@@ -292,9 +327,19 @@ The existing `wiki_reindex_embeddings` tool is deprecated in the new major and d
 
 ### Index lifecycle
 
-QMD owns its SQLite schema and transactions. pi-llm-wiki does not manipulate QMD tables directly. Before a forced full rebuild, the adapter builds or validates replacement state without deleting the last usable index. If QMD cannot provide atomic replacement through its SDK, the adapter rebuilds into a sibling temporary database, closes it, validates basic status and document counts, then renames it into place.
+QMD owns its SQLite schema and transactions. pi-llm-wiki does not manipulate QMD tables directly. Generated state lives as a complete artifact directory:
 
-Content hashes, QMD schema/version information, and model identities determine staleness. A removed Markdown page must disappear from QMD results after the next incremental update. Historical feedback may retain its page ID but cannot boost a result that no longer exists.
+```text
+meta/qmd/
+├── current/          # index.sqlite plus any WAL/SHM/native sidecars
+├── documents/        # validated mirror
+├── manifest.json
+└── swap.json         # present only during recoverable replacement
+```
+
+A forced rebuild uses QMD-supported replacement if the pinned SDK provides it. Otherwise it builds `staging-<uuid>/`, closes both QMD stores, checkpoints through QMD when supported, validates status and document counts, and swaps the complete directory rather than a lone SQLite file. The adapter records the swap phase in `swap.json`, renames `current` to `previous`, renames staging to `current`, reopens and validates it, then removes `previous`. Startup recovery completes or rolls back any interrupted phase. A failed reopen restores `previous`. No rename occurs while either store is open.
+
+Content hashes, QMD schema/version information, and resolved model identities determine staleness. A removed Markdown page must disappear from QMD results after the next incremental update. Historical feedback may retain its page ID but cannot boost a result that no longer exists.
 
 ## Retrieval Modes
 
@@ -310,37 +355,56 @@ Configuration adds one primary setting:
 
 Invalid explicit values fail closed with a configuration diagnostic. Default is `adaptive`.
 
+### QMD adapter mapping
+
+| Mode | Exact QMD SDK path | Model-failure fallback |
+|---|---|---|
+| `lexical` | `store.searchLex(query, { limit: 40 })` | no lower mode; return diagnostic on native/store failure |
+| `hybrid` | `store.search({ queries: [{ type: "lex", query }, { type: "vec", query }], rerank: false, candidateLimit: 40, limit: 10, explain: true })` | `searchLex` |
+| `adaptive` initial | same typed-query call as `hybrid` | `searchLex` |
+| `adaptive` uncertain | `store.search({ query, intent, rerank: true, candidateLimit: 40, limit: 10, explain: true })` | retain initial hybrid list |
+| `quality` | same expanded/reranked call as adaptive-uncertain | typed hybrid, then lexical |
+
+A typed `queries` call is mandatory for hybrid mode because plain `search({ query })` performs QMD query expansion. The adapter verifies these mappings against the pinned QMD SDK in contract tests.
+
 ### `lexical`
 
-- QMD BM25 only
-- no embedding, expansion, or reranking model load
-- best for exact names, commands, identifiers, filenames, and low-resource systems
+QMD BM25 only; no embedding, expansion, or reranking model is loaded. This mode is best for exact names, commands, identifiers, filenames, and low-resource systems.
 
 ### `hybrid`
 
-- lexical and vector candidates
-- reciprocal-rank fusion
-- no final reranking
-- uses the original query as both lexical and vector intent without generative query expansion
+The original query is sent as explicit lexical and vector subqueries. QMD performs rank fusion without generative expansion or final reranking.
 
 ### `adaptive`
 
-- starts with hybrid retrieval
-- reruns through QMD's expanded and reranked query path only when the initial result is uncertain
-- uncertainty includes a small top-result margin, lexical/vector disagreement, broad question form, multiple topical clusters, or a detected contradiction cluster
-- exact high-confidence identifiers bypass reranking
+Adaptive starts with the exact hybrid call. It invokes QMD's expanded and reranked path when any initial condition is true:
 
-Adaptive thresholds are internal defaults initially. They become settings only if benchmark results show users need to tune them.
+- normalized top-two score margin is below `0.08`
+- Jaccard overlap between lexical and vector top-five page IDs is below `0.40`
+- the normalized query begins with `who`, `what`, `when`, `where`, `why`, `how`, `which`, `compare`, `explain`, or their benchmarked multilingual equivalents
+- the initial candidates contain a validated contradiction edge
+
+An exact title, alias, command, filename, or page-ID match with normalized score at least `0.80` bypasses reranking.
 
 ### `quality`
 
-- QMD query expansion
-- lexical and vector candidate generation
-- reciprocal-rank fusion
-- local reranking of the bounded candidate pool
-- intended for maximum relevance despite higher latency and model load
+Quality always uses QMD query expansion, lexical and vector retrieval, rank fusion, and local reranking of at most 40 candidates.
+
+### Score normalization and first-release limits
+
+QMD raw scores are used for within-store confidence only. Cross-vault merging converts each store's ordered results to reciprocal-rank score `1 / (60 + rank)`. The final bounded multiplier is clamped to `0.90–1.10`: exact identity match `+0.05`, stable canonical role `+0.03`, evidence role `-0.02`, deprecated status `-0.08`, and all implicit feedback combined at no more than `±0.02`. Ties resolve by lower QMD rank, then project vault, then page ID. These constants are changed only through benchmarked code changes.
+
+Automatic recall requests at most 10 QMD candidates per vault, requires normalized QMD score `>= 0.50`, emits at most 3 memory bundles, and uses an 8,000-character context budget. Explicit recall uses caller `max_results` (default 5, maximum 10), a `0.25` QMD floor, and existing links-first rendering above the vault threshold.
+
+Each automatic bundle contains at most one canonical page and two evidence excerpts of at most 800 characters each. Parent-page deduplication is mandatory. If alternatives exist, no more than two canonical cards with the same `(type, domain)` pair may occupy the three automatic slots. Evidence order is direct `supports`/`derived_from`, then QMD rank, then page ID. Lower-ranked bundles are removed before evidence attached to the top bundle.
 
 QMD's supported environment variables remain the model-override surface. pi-llm-wiki will not duplicate every QMD model setting.
+
+### Query and intent construction
+
+The adapter derives `query` by applying Unicode NFKC normalization, trimming, and collapsing whitespace to the explicit `wiki_recall` query or current automatic-recall prompt. It does not remove punctuation, quoted phrases, path separators, or identifier characters before QMD receives the string. Empty queries return no result. Inputs above 2,000 characters are rejected with `recall_query_too_long` rather than silently truncated.
+
+For expanded/reranked calls, `intent` is the concatenation of non-empty vault `topic` and `mode` values from config, capped at 256 characters. It provides collection disambiguation only and never replaces or expands the query itself. If both are absent, `intent` is omitted. The full conversational transcript is never sent to QMD.
 
 ## Recall Data Flow
 
@@ -363,9 +427,9 @@ QMD's supported environment variables remain the model-override surface. pi-llm-
 Automatic recall is precision-first:
 
 - active project only when present; personal otherwise
-- small result count
-- strict confidence threshold
-- no injection when confidence is insufficient
+- at most 10 candidates and 3 packed bundles
+- normalized QMD score floor `0.50`
+- no injection when no candidate clears that floor
 - no generic graph expansion
 
 Explicit `wiki_recall` is recall-first:
@@ -385,6 +449,7 @@ After QMD ranking, pi-llm-wiki may apply only bounded, explainable adjustments f
 
 - exact title, alias, command, or identifier match
 - stable versus draft canonical status
+- current human verification (`+0.02` within the existing combined clamp)
 - applicable freshness and verification state
 - explicit user relevance judgment
 - weak local usage evidence
@@ -414,13 +479,42 @@ Conflicting claims are preserved separately with their dates, scope, status, and
 
 When recall finds a confirmed or plausible conflict, context shows both claims and asks the user which applies. The prompt identifies exact page IDs so the response can be applied deterministically.
 
-An unambiguous user response causes the agent to invoke a focused conflict-resolution operation that:
+An unambiguous user response causes the agent to invoke:
 
-1. records a dated resolution event
-2. adds `supersedes`, `qualifies`, or `applies_under` relations as selected
-3. marks the endorsed current interpretation without deleting the older claim
-4. preserves all source links and prior verification history
-5. rebuilds metadata and updates the affected QMD store
+```text
+wiki_resolve_conflict(
+  vault: "personal" | "project",
+  selected_page_id: string,
+  other_page_id: string,
+  relation: "supersedes" | "qualifies" | "applies_under",
+  scope?: string,
+  rationale?: string,
+  replaces?: string
+)
+```
+
+`selected_page_id` is the user-endorsed claim. Relation direction is always selected → other. `supersedes` means selected is current and the other claim is historical; `qualifies` means both remain stable and selected narrows the other; `applies_under` requires non-empty `scope` and means selected applies in that scope while the other remains applicable outside it. The tool rejects identical page IDs, missing pages, cross-vault pairs, invalid scope use, and any `replaces` ID that is not the active resolution for the same unordered pair.
+
+The tool writes one atomic resolution page under `wiki/analyses/` rather than editing both claim pages:
+
+```yaml
+type: analysis
+category: conflict-resolution
+status: stable
+resolution:
+  id: <semantic-hash>
+  selected: concepts/selected
+  other: concepts/other
+  relation: supersedes
+  scope: null
+  decided_by: user
+  decided_at: <ISO timestamp>
+  replaces: null
+```
+
+The body records the rationale and ordinary Markdown links to both claims. The ID and filename are a hash of vault ID, ordered page IDs, relation, normalized scope, and optional replaced resolution. Repeating the same operation is an idempotent no-op that returns the existing page. A changed choice requires `replaces` and creates a new immutable resolution record; recall follows the active replacement chain. A single temporary-file write, validation, and atomic rename commits the resolution. Metadata and QMD update occur afterward; failure leaves the valid resolution committed and reports stale derived state.
+
+The resolution page is authoritative evidence of the user's choice. For `supersedes`, recall treats the other claim as historical without rewriting its `status`; for the other relations, both remain stable. The derived relation graph and feedback projection mark the selected interpretation as current for the specified scope. Pi and MCP expose identical parameters, validation codes, and structured results.
 
 If the response is ambiguous, the system asks one clarifying question and makes no change. An LLM may map natural language to the explicit page IDs and relation, but it may not invent a third claim or silently edit unrelated content.
 
@@ -430,10 +524,10 @@ Recall returns grouped memory bundles rather than a flat list of chunks.
 
 Packing order:
 
-1. best applicable canonical card
-2. one or two strongest supporting evidence excerpts
+1. highest final-score applicable canonical card, using the documented tie-breaks
+2. at most two supporting evidence excerpts, ordered by typed relation and QMD rank
 3. relevant qualifier, superseding claim, or competing claim
-4. additional diverse canonical cards while budget remains
+4. additional canonical cards under the `(type, domain)` diversity cap while the 8,000-character automatic budget remains
 5. unpromoted evidence only when no suitable card covers the need
 
 Every packed item includes:
@@ -454,60 +548,49 @@ The existing links-first behavior remains useful for interactive expansion, but 
 
 ### Durable event format
 
-Implicit retrieval feedback is append-only local state in `meta/recall-feedback.jsonl`. To reduce accidental prompt retention, events store a hash of the normalized query rather than raw query text by default.
+Recall feedback is recorded through internal `recall_feedback` entries in the existing append-only `meta/events.jsonl`. To reduce accidental prompt retention, events store a SHA-256 hash of the normalized query rather than raw query text.
 
 Each event includes:
 
+- `schema: 1`
 - timestamp
+- `visibility: internal`
+- stable vault ID and page ID
 - query hash
 - retrieval mode
 - index and model versions
-- page ID and rank
+- shown rank
 - action
 
-Supported actions are:
+Supported actions are `shown`, `opened`, `cited`, `shown_only`, `relevant`, `irrelevant`, `corrected`, and `conflict_selected`.
 
-- `shown`
-- `opened`
-- `cited`
-- `ignored`
-- `relevant`
-- `irrelevant`
-- `corrected`
-- `conflict_selected`
+Instrumentation is exact:
 
-Explicit corrections are also preserved in human-readable wiki knowledge or resolution records; the feedback log is not their only source of truth.
+- the recall service emits `shown` after context or links are successfully delivered
+- the tool-call hook emits `opened` when a later `read` path resolves to a result shown in the active turn
+- the turn-end hook emits `cited` when the assistant output contains the shown page's wikilink or ID
+- the turn-end hook emits `shown_only` when no open or citation was observed; this is only an engagement proxy, not proof of irrelevance
+- the agent calls `wiki_recall_feedback(vault_id, page_id, judgment, correction?)` for an explicit `relevant`, `irrelevant`, or `corrected` user statement; the pair must exist in the active session's shown-result set, `correction` is required only for `corrected`, and the service obtains the query hash from that set rather than accepting arbitrary query text
+- `wiki_resolve_conflict` emits `conflict_selected`
+
+For `corrected`, `wiki_recall_feedback` first creates a normal human-readable `source` observation containing the user's correction and a Markdown link to the corrected page, using the existing observation producer and parser validation. Its frontmatter includes `status: observation`, `category: recall-correction`, `corrected_page`, `vault_id`, and `query_hash`; this shape is how projection replay identifies it. It then appends the internal feedback event. If observation creation fails, neither event nor ranking adjustment is written. If the later event append fails, the correction page remains authoritative and the tool reports `correction_saved_feedback_pending`; a metadata rebuild can replay such correction observations into the feedback projection. `relevant` and `irrelevant` write only internal events.
+
+`wiki_resolve_conflict` acquires the event lock before writing its resolution page, appends `conflict_selected` before releasing the lock, and aborts without a page if the lock cannot be acquired. This keeps the durable resolution and its feedback event aligned.
+
+Copy and dwell-time signals are unavailable in Pi's current hooks and are not claimed. Explicit corrections are therefore preserved in human-readable wiki knowledge or resolution records; the event stream is not their only source of truth.
 
 ### Signal strength
 
 - explicit correction or conflict choice: strong
 - explicit relevant/irrelevant judgment: strong
-- cited or copied result: moderate
+- cited result: moderate
 - opened result: weak positive
-- visibly shown but ignored result: very weak negative
+- `shown_only`: at most `-0.005` before decay
 - result not shown: no signal
 
-All boosts decay, remain bounded, and apply only after retrieval. Implicit signals cannot rewrite Markdown, resolve contradictions, or make a non-candidate appear. Position bias is accounted for by giving ignored results minimal weight.
+All boosts decay with a 90-day half-life, remain bounded to `±0.02` in final ranking, and apply only after retrieval. Implicit signals cannot rewrite Markdown, resolve contradictions, or make a non-candidate appear.
 
-Feedback collection is local and enabled by default in the new major. A single boolean setting disables implicit event capture without disabling explicit corrections.
-
-## Card Promotion
-
-The existing corpus is indexed immediately without bulk conversion.
-
-A background promotion queue prioritizes evidence that is:
-
-- repeatedly retrieved
-- frequently cited or opened
-- involved in explicit corrections
-- repeated across several sources
-- linked from multiple canonical pages
-- central to active projects
-- contradictory or time-sensitive
-
-The model may propose a canonical card containing one durable idea and exact source references. Proposed metadata and body content remain draft until reviewed. Promotion does not delete, merge, or rewrite underlying source pages.
-
-Low-value observations remain searchable evidence indefinitely. The target is a useful canonical layer, not one generated card per observation.
+Feedback collection is local and enabled by default in the new major. A single boolean setting disables `shown`, `opened`, `cited`, and `shown_only` capture without disabling explicit corrections or conflict records.
 
 ## Error Handling
 
@@ -540,7 +623,8 @@ Model downloads and long-running indexing show visible progress. Cancellation st
 ### Added
 
 - `wiki_reindex` consolidates lexical and vector reindexing.
-- one focused conflict-resolution operation records user-approved resolutions safely.
+- `wiki_resolve_conflict` records a user-approved resolution as one immutable analysis page.
+- `wiki_recall_feedback` records explicit relevance, irrelevance, or correction judgments for an already shown `(vault_id, page_id)` result.
 
 ### Deprecated
 
@@ -566,16 +650,22 @@ QMD model overrides use QMD's documented environment variables. Candidate counts
 The next major release:
 
 1. raises `engines.node` to Node.js 22 or newer
-2. adds QMD as a runtime dependency
-3. creates QMD stores lazily per vault
-4. keeps Markdown and existing metadata schemas readable without content migration
-5. ignores old page-level embedding sidecars after QMD activation
-6. prompts users to run `wiki_reindex` for full hybrid/quality recall
-7. supports immediate lexical recall after document indexing, even before embeddings finish
-8. documents QMD model download size and first-run latency
-9. leaves the previous major release available for Node.js 18 users
+2. pins `@tobilu/qmd` to the exact contract-tested version `2.6.3`, raises the development TypeScript version to satisfy QMD's declared peer range, and requires adapter tests plus benchmark comparison before any QMD upgrade
+3. supports the QMD package's tested native targets: Linux x64/arm64, macOS x64/arm64, and Windows x64; release CI performs clean-install smoke tests on Linux x64, macOS arm64, and Windows x64
+4. treats native dependency installation failure as package installation failure with a clear supported-platform message; there is no runtime shim for an installation that never completed
+5. records QMD schema version and resolved embedding, expansion, and reranker model IDs in index status
+6. uses QMD's standard model cache and documents the approximately 2 GB first-use download for default embedding, reranking, and expansion models
+7. verifies that `searchLex` indexes and queries without downloading or loading model files
+8. creates QMD stores lazily per vault
+9. keeps Markdown and existing metadata schemas readable without content migration, except for one stable `vault_id` backfill in config
+10. ignores old page-level embedding sidecars after QMD activation
+11. prompts users to run `wiki_reindex` for full hybrid/quality recall
+12. supports immediate lexical recall after validated document indexing, even before embeddings finish
+13. leaves the previous major release available for Node.js 18 users
 
-No existing source or canonical page is deleted or rewritten merely to adopt QMD. Card promotion and typed-link enrichment remain incremental, reviewable work.
+No existing source or canonical page is deleted or rewritten merely to adopt QMD. Typed-link enrichment remains incremental and reviewable. Automated card promotion requires a separate future design.
+
+The approved scope spans runtime migration, validated indexing, retrieval, memory assembly, feedback, and conflict resolution. It therefore requires a multi-phase implementation roadmap rather than one monolithic implementation plan.
 
 ## Evaluation
 
@@ -624,15 +714,17 @@ Run the same benchmark against:
 
 ### Release gates
 
-- no regression on exact identifier and title lookup
-- lower automatic-recall false-positive rate than the current baseline
-- material held-out improvement in canonical-card and evidence ranking
-- contradiction cases surface all judged competing claims
+- every exact identifier/title benchmark query that the baseline places in the top three remains in the top three
+- held-out nDCG@10 improves by at least 10% relative to the current baseline in `quality` mode
+- held-out MRR does not decline by more than 2% in any mode intended to supersede the baseline
+- automatic-recall false-positive rate falls by at least 25% relative to baseline
+- contradiction coverage is 100% on judged conflict cases
+- candidate Recall@20 does not decline by more than two percentage points
 - malformed pages and unavailable models degrade as specified
 - Pi and MCP return equivalent structured results
 - every explicit correction becomes a persistent regression case
 
-Exact numeric improvement thresholds are set after the initial benchmark establishes baseline variance; they must be recorded before tuning final ranking constants.
+The first benchmark run records confidence intervals and hardware context. Constants may be tightened before implementation, but the release cannot weaken these gates without a new reviewed design decision.
 
 ## Testing Strategy
 
@@ -655,15 +747,19 @@ QMD adapter tests use fakes and do not load local models.
 
 ### Integration tests
 
-- temporary Markdown vault indexed through the QMD SDK
-- incremental add, update, and delete
-- lexical recall before embeddings
+- temporary Markdown vault indexed through the pinned QMD SDK
+- incremental add, update, and delete through the validated mirror
+- malformed or reserved pages absent from QMD candidates
+- lexical recall before and without model downloads
 - forced vector reindex
+- complete SQLite artifact close/swap/reopen and interrupted-swap recovery
 - failed rebuild preserving the prior database
-- personal and project store isolation
+- personal and project store isolation, including duplicate page IDs and feedback
 - Pi/MCP parity
-- automatic recall suppressing low-confidence results
-- conflict-resolution operation preserving both claims
+- automatic recall suppressing low-confidence results at specified defaults
+- conflict-resolution idempotency, replacement chains, and preservation of both claims
+- `relations` parse/serialize/lint/Markdown-link coexistence
+- internal feedback event instrumentation and replay failure behavior
 
 Model-heavy embedding and reranking smoke tests may use a separate CI job with cached models; ordinary unit tests must remain deterministic and network-free.
 
@@ -678,7 +774,7 @@ Benchmark runs are versioned artifacts, not ordinary per-commit unit tests. Rele
 - **Reranker hides minority evidence:** add contradiction neighbors after seed ranking and test contradiction coverage.
 - **Implicit feedback creates popularity bias:** keep it weak, bounded, decayed, and post-retrieval only.
 - **QMD/model upgrade changes ranking:** record versions, mark affected indexes stale, and rerun benchmark before release.
-- **Native dependency or model failure:** fall back to QMD lexical search or no injection with clear diagnostics.
+- **Native dependency or model failure:** supported-platform clean-install CI catches native packaging defects; runtime model failures fall back to QMD lexical search or no injection with clear diagnostics.
 - **Index contains sensitive content:** keep it under protected local `meta/`, exclude it from OKF exports, and document that full-vault backups contain derived searchable text.
 - **Graph hubs dominate:** only typed one-hop relationships can add candidates; generic links do not boost rank.
 - **Over-atomization harms browsing:** atomicity follows useful idea boundaries, not arbitrary size limits.
