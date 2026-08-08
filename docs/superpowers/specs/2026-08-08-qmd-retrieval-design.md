@@ -650,7 +650,7 @@ QMD model overrides use QMD's documented environment variables. Candidate counts
 The next major release:
 
 1. raises `engines.node` to Node.js 22 or newer
-2. pins `@tobilu/qmd` to the exact contract-tested version `2.6.3`, raises the development TypeScript version to satisfy QMD's declared peer range, and requires adapter tests plus benchmark comparison before any QMD upgrade
+2. pins `@tobilu/qmd` to the exact published, contract-tested version `2.5.3`, raises the development TypeScript version to satisfy QMD's declared peer range, and requires adapter tests plus benchmark comparison before any QMD upgrade
 3. supports the QMD package's tested native targets: Linux x64/arm64, macOS x64/arm64, and Windows x64; release CI performs clean-install smoke tests on Linux x64, macOS arm64, and Windows x64
 4. treats native dependency installation failure as package installation failure with a clear supported-platform message; there is no runtime shim for an installation that never completed
 5. records QMD schema version and resolved embedding, expansion, and reranker model IDs in index status
