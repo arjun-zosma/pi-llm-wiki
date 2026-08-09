@@ -23,6 +23,8 @@ import {
   statusOperation,
 } from "../mcp/operations.js";
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 describe("MCP parity with shared services", () => {
   let tmpDir: string;
   let paths: ReturnType<typeof getVaultPaths>;
@@ -237,9 +239,17 @@ describe("MCP parity with shared services", () => {
           .map((entry) => `${entry.name}${entry.isDirectory() ? "/" : ""}`)
           .sort();
       expect(entries(mcpRoot)).toEqual(entries(piRoot));
-      expect(JSON.parse(readFileSync(join(mcpRoot, ".llm-wiki", "config.json"), "utf-8"))).toEqual(
-        JSON.parse(readFileSync(join(piRoot, ".llm-wiki", "config.json"), "utf-8")),
+      // Each side generates its own UUID. Assert both are valid, then compare
+      // the rest of the config byte-for-byte after omitting vault_id.
+      const mcpConfig = JSON.parse(
+        readFileSync(join(mcpRoot, ".llm-wiki", "config.json"), "utf-8"),
       );
+      const piConfig = JSON.parse(readFileSync(join(piRoot, ".llm-wiki", "config.json"), "utf-8"));
+      const { vault_id: mcpVaultId, ...mcpConfigRest } = mcpConfig;
+      const { vault_id: piVaultId, ...piConfigRest } = piConfig;
+      expect(mcpVaultId).toMatch(UUID);
+      expect(piVaultId).toMatch(UUID);
+      expect(mcpConfigRest).toEqual(piConfigRest);
     });
 
     it("is safe to re-run and reports the vault as pre-existing", async () => {
