@@ -61,7 +61,9 @@
     "release:patch": "node scripts/release.js patch",
     "release:minor": "node scripts/release.js minor",
     "release:major": "node scripts/release.js major",
-    "release:push": "git push origin main --tags"
+    "release:push": "git push origin main --tags",
+    "benchmark:retrieval": "vitest run test/retrieval-benchmark.test.ts --reporter=verbose",
+    "benchmark:retrieval:update": "node scripts/update-retrieval-baseline.mjs"
   },
   "pi": {
     "extensions": [
