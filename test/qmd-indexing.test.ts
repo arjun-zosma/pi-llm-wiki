@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -321,5 +321,30 @@ describe("QMD vault reindexing", () => {
     });
     expect(result.ok).toBe(false);
     expect(readFileSync(join(paths.qmdCurrent, "index-state.json"), "utf8")).toBe(currentState);
+  });
+
+  it("returns a graceful busy result when a live lock is held", async () => {
+    const paths = tempVault();
+    writePage(paths, "concepts/a.md", "A");
+    const lockDir = join(paths.meta, "qmd", "index.lock");
+    mkdirSync(lockDir, { recursive: true });
+    writeFileSync(
+      join(lockDir, "owner.json"),
+      JSON.stringify({
+        pid: process.pid,
+        hostname: hostname(),
+        acquiredAt: new Date().toISOString(),
+      }),
+    );
+
+    const result = await reindexQmdVault(paths, {
+      scope: "changed",
+      components: ["lexical"],
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errors.some((e) => e.code === "qmd_index_busy")).toBe(true);
+    // A busy lock we do not own must not be removed.
+    expect(existsSync(lockDir)).toBe(true);
   });
 });

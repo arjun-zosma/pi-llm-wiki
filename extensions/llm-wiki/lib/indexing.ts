@@ -70,7 +70,12 @@ export function scheduleReindex(
           // Generated QMD search state is repairable and must not fail the
           // authoritative write. On a projection failure, only invalidate unsafe
           // QMD entries (never index valid additions).
-          await invalidateQmdAfterProjectionFailure(paths);
+          try {
+            await invalidateQmdAfterProjectionFailure(paths);
+          } catch {
+            // Best-effort safety pass; a busy/transient lock must not abort the
+            // metadata drain loop.
+          }
           continue;
         }
 

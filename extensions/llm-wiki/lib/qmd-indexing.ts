@@ -454,7 +454,25 @@ export async function reindexQmdVault(
   const vectors = { generated: 0, skipped: 0, errors: 0 };
 
   return enqueue(paths.root, async () => {
-    await acquireIndexLock(paths);
+    try {
+      await acquireIndexLock(paths);
+    } catch (error: unknown) {
+      if (error instanceof QmdIndexError && error.code === "qmd_index_busy") {
+        const status = await readQmdIndexStatus(paths);
+        return {
+          ok: false,
+          scope,
+          components,
+          documents,
+          vectors,
+          elapsedMs: Date.now() - started,
+          status,
+          warnings,
+          errors: [{ code: "qmd_index_busy", message: error.message }],
+        };
+      }
+      throw error;
+    }
     let vaultId: string | undefined;
     let manifestHash = "";
     try {
@@ -692,7 +710,13 @@ export async function invalidateQmdAfterProjectionFailure(
   deps?: Partial<QmdIndexDeps>,
 ): Promise<void> {
   await enqueue(paths.root, async () => {
-    await acquireIndexLock(paths);
+    try {
+      await acquireIndexLock(paths);
+    } catch {
+      // Busy or transient — the safety pass is best-effort; status will show
+      // the current state. Never remove a lock we do not own.
+      return;
+    }
     try {
       let vaultId: string;
       try {
