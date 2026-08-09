@@ -218,6 +218,16 @@ describe("package structure", () => {
     expect(readme).toContain("Obsidian");
   });
 
+  it("documents validated QMD indexing (phase 2)", () => {
+    for (const path of ["README.md", "docs/api.md", "docs/architecture.md", "docs/commands.md"]) {
+      const content = readFile(join(rootDir, path));
+      expect(content, path).toContain("wiki_reindex");
+      expect(content, path).toContain("meta/qmd");
+    }
+    expect(readFile(join(rootDir, "docs/api.md"))).toContain('components: ["lexical", "vectors"]');
+    expect(readFile(join(rootDir, "docs/architecture.md"))).toContain("generated and rebuildable");
+  });
+
   it("documents the runnable MCP entry point in every README (issue #129)", () => {
     const pkg = JSON.parse(readFile(join(rootDir, "package.json")));
     // The manifest command is the one test/mcp-package.test.ts actually spawns,
