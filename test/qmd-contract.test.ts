@@ -3,6 +3,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { type ExpandedQuery, type QMDStore, type SearchOptions, createStore } from "@tobilu/qmd";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { openQmdIndexStore } from "../extensions/llm-wiki/lib/qmd-store.js";
 
 const hybridQueries: ExpandedQuery[] = [
   { type: "lex", query: "signed access tokens" },
@@ -122,4 +123,68 @@ describe("QMD 2.5.3 SDK contract", () => {
     },
     1_200_000,
   );
+});
+
+describe("QMD normalized index store adapter", () => {
+  it("updates canonical and evidence collections and reports status", async () => {
+    const root = mkdtempSync(join(tmpdir(), "pi-llm-wiki-qmd-adapter-"));
+    const documentsPath = join(root, "documents");
+    const dbPath = join(root, "index.sqlite");
+    try {
+      mkdirSync(join(documentsPath, "canonical"), { recursive: true });
+      mkdirSync(join(documentsPath, "evidence"), { recursive: true });
+      writeFileSync(
+        join(documentsPath, "canonical", "concept.md"),
+        "# Concept\n\nA canonical conclusion.\n",
+      );
+      writeFileSync(join(documentsPath, "evidence", "source.md"), "# Source\n\nRaw evidence.\n");
+
+      const handle = await openQmdIndexStore({ dbPath, documentsPath });
+      const updated = await handle.update();
+      expect(updated).toEqual({
+        collections: 2,
+        indexed: 2,
+        updated: 0,
+        unchanged: 0,
+        removed: 0,
+        needsEmbedding: 2,
+      });
+      expect(await handle.status()).toMatchObject({
+        totalDocuments: 2,
+        needsEmbedding: 2,
+        hasVectorIndex: false,
+        canonicalDocuments: 1,
+        evidenceDocuments: 1,
+      });
+      await handle.close();
+
+      // Delete one evidence file, reopen, update, expect removed: 1.
+      rmSync(join(documentsPath, "evidence", "source.md"));
+      const reopened = await openQmdIndexStore({ dbPath, documentsPath });
+      const removed = await reopened.update();
+      expect(removed.removed).toBe(1);
+      expect(removed.indexed).toBe(0);
+      expect((await reopened.status()).totalDocuments).toBe(1);
+      await reopened.close();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("lexical update leaves the QMD model cache unchanged", async () => {
+    const root = mkdtempSync(join(tmpdir(), "pi-llm-wiki-qmd-adapter-"));
+    const documentsPath = join(root, "documents");
+    const dbPath = join(root, "index.sqlite");
+    try {
+      mkdirSync(join(documentsPath, "canonical"), { recursive: true });
+      writeFileSync(join(documentsPath, "canonical", "a.md"), "# A\n\nBody A.\n");
+      const beforeModels = modelFiles();
+      const handle = await openQmdIndexStore({ dbPath, documentsPath });
+      await handle.update();
+      expect(modelFiles()).toEqual(beforeModels);
+      await handle.close();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
