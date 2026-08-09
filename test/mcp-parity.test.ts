@@ -72,7 +72,7 @@ describe("MCP parity with shared services", () => {
   it("status parity: MCP matches shared getWikiStatus", async () => {
     rebuildMetadata(paths);
 
-    const piStatus = getWikiStatus(paths);
+    const piStatus = await getWikiStatus(paths);
     const mcpStatus = await statusOperation(paths);
 
     expect(mcpStatus.knowledgeFormat).toBe(piStatus.knowledgeFormat);
@@ -82,6 +82,7 @@ describe("MCP parity with shared services", () => {
     expect(mcpStatus.blockingDiagnostics).toEqual(
       piStatus.blockingDiagnostics.map((d) => ({ code: d.code, message: d.message })),
     );
+    expect(mcpStatus.qmd).toEqual(piStatus.qmd);
   });
 
   it("recall parity: MCP matches shared searchWikiLayered with vault diagnostics", async () => {

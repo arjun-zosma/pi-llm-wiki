@@ -148,8 +148,9 @@ export async function statusOperation(paths: VaultPaths): Promise<{
   byType: Record<string, number>;
   blockingDiagnostics: Array<{ code: string; message: string }>;
   lastUpdated: string;
+  qmd: import("../extensions/llm-wiki/lib/qmd-indexing.js").QmdGeneratedStatus;
 }> {
-  const status = getWikiStatus(paths);
+  const status = await getWikiStatus(paths);
   return {
     knowledgeFormat: status.knowledgeFormat,
     totalPages: status.totalPages,
@@ -159,6 +160,7 @@ export async function statusOperation(paths: VaultPaths): Promise<{
       message: d.message,
     })),
     lastUpdated: status.lastUpdated,
+    qmd: status.qmd,
   };
 }
 

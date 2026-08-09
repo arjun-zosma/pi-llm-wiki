@@ -3,6 +3,7 @@ import { join } from "node:path";
 import type { KnowledgeDiagnostic } from "./knowledge-document.js";
 import type { Registry } from "./metadata.js";
 import {
+  type QmdGeneratedStatus,
   type QmdIndexProgress,
   type QmdIndexState,
   type QmdReindexResult,
@@ -39,6 +40,7 @@ export interface WikiStatusSnapshot {
   byType: Record<string, number>;
   blockingDiagnostics: KnowledgeDiagnostic[];
   lastUpdated: string;
+  qmd: QmdGeneratedStatus;
 }
 
 /**
@@ -156,9 +158,10 @@ function matchesField(id: string, entry: Record<string, unknown>, query: string)
 /**
  * Get a status snapshot of the wiki.
  *
- * Reports resolved knowledge_format, page counts, and blocking diagnostics.
+ * Reports resolved knowledge_format, page counts, blocking diagnostics, and
+ * generated QMD index status (read without opening any QMD store).
  */
-export function getWikiStatus(paths: VaultPaths): WikiStatusSnapshot {
+export async function getWikiStatus(paths: VaultPaths): Promise<WikiStatusSnapshot> {
   const vaultState = inspectVaultFormat(paths);
   const diagnostics = [...vaultState.diagnostics];
 
@@ -189,6 +192,7 @@ export function getWikiStatus(paths: VaultPaths): WikiStatusSnapshot {
     byType,
     blockingDiagnostics: diagnostics.filter((d) => d.severity === "error"),
     lastUpdated: registry?.last_updated || "",
+    qmd: await readQmdIndexStatus(paths),
   };
 }
 

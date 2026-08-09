@@ -14,7 +14,7 @@ import {
 import { buildResolvedBacklinks } from "./knowledge-links.js";
 import { repairLegacyKnowledgeDocuments } from "./legacy-repair.js";
 import { type Registry, appendEvent, rebuildMetadata, rebuildMetadataLight } from "./metadata.js";
-import { reindexQmdVault } from "./qmd-indexing.js";
+import { readQmdIndexStatus, reindexQmdVault } from "./qmd-indexing.js";
 import type { Runtime } from "./runtime.js";
 import { captureFile, captureText, captureUrl } from "./source-packet.js";
 import { parseModelRef } from "./task-config.js";
@@ -833,8 +833,9 @@ export function registerWikiLint(pi: ExtensionAPI, runtime?: Runtime): void {
  * Run the wiki health scan (issue #77 extracted it from the tool body so it can
  * run off-thread via `dispatchReported`). Returns the human-readable summary.
  */
-function runWikiLint(paths: VaultPaths, autoFix: boolean): string {
+async function runWikiLint(paths: VaultPaths, autoFix: boolean): Promise<string> {
   assertWritableVault(paths);
+  const qmdStatus = await readQmdIndexStatus(paths);
   let repair: ReturnType<typeof repairLegacyKnowledgeDocuments> | undefined;
   if (autoFix) {
     let projection = rebuildMetadata(paths);
@@ -984,6 +985,24 @@ function runWikiLint(paths: VaultPaths, autoFix: boolean): string {
     rebuildMetadataLight(paths);
   }
 
+  const qmdFindings: string[] = [];
+  if (qmdStatus.state === "stale") {
+    const components = qmdStatus.hasVectorIndex ? "lexical" : "lexical, vectors";
+    qmdFindings.push(
+      `- QMD index stale (${qmdStatus.indexedManifestHash ? "manifest or model changed" : ""}): repair with \`wiki_reindex(scope=\"changed\", components=[\"${components}\"], vault=\"active\")\``,
+    );
+  } else if (qmdStatus.state === "recovering") {
+    qmdFindings.push(
+      `- QMD swap interrupted (${qmdStatus.swapPhase ?? ""}): restart recovery via \`wiki_reindex(vault=\"active\")\``,
+    );
+  } else if (qmdStatus.state === "error") {
+    qmdFindings.push(
+      `- QMD index error: ${qmdStatus.issues[0]?.message ?? "repair with wiki_reindex"} — \`wiki_reindex(scope=\"changed\", components=[\"lexical\"], vault=\"active\")\``,
+    );
+  } else if (qmdStatus.state === "missing") {
+    qmdFindings.push("- QMD index not built yet (informational): run wiki_reindex to build it");
+  }
+
   return [
     "🧹 **LLM Wiki lint complete**",
     "",
@@ -997,6 +1016,10 @@ function runWikiLint(paths: VaultPaths, autoFix: boolean): string {
     reportPath ? `📄 Report: \`${reportPath}\`` : "",
     repair?.manifestPath ? `🛟 Repair manifest: \`${repair.manifestPath}\`` : "",
     gaps.length ? `💡 ${gaps.length} knowledge gap(s) tracked` : "",
+    "",
+    "## QMD Index",
+    `- State: ${qmdStatus.state}`,
+    ...qmdFindings,
   ]
     .filter(Boolean)
     .join("\n");
@@ -1023,7 +1046,7 @@ export function registerWikiStatus(pi: ExtensionAPI): void {
         };
       }
 
-      const status = getWikiStatus(paths);
+      const status = await getWikiStatus(paths);
       const config = readJson<Record<string, unknown>>(join(paths.dotWiki, "config.json"), {});
       const backlinks = readJson<Record<string, string[]>>(join(paths.meta, "backlinks.json"), {});
 
@@ -1058,6 +1081,10 @@ export function registerWikiStatus(pi: ExtensionAPI): void {
         `Gaps: ${gaps.gaps?.length || 0}`,
         `Health: ${health}`,
         `Last updated: ${status.lastUpdated || "Never"}`,
+        `QMD index: ${status.qmd.state}`,
+        `QMD documents: ${status.qmd.totalDocuments} (${status.qmd.canonicalDocuments} canonical, ${status.qmd.evidenceDocuments} evidence)`,
+        `QMD embeddings pending: ${status.qmd.needsEmbedding}`,
+        `QMD package: ${status.qmd.qmdVersion}`,
         ...diagLines,
       ];
 
@@ -1073,6 +1100,7 @@ export function registerWikiStatus(pi: ExtensionAPI): void {
           gaps: gaps.gaps?.length || 0,
           health,
           blockingDiagnostics: status.blockingDiagnostics,
+          qmd: status.qmd,
         } as Record<string, unknown>,
       };
     },
