@@ -15,6 +15,7 @@ import { join } from "node:path";
 import { McpServer } from "@modelcontextprotocol/server";
 import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 import * as z from "zod/v4";
+import { recoverQmdIndex } from "../extensions/llm-wiki/lib/qmd-indexing.js";
 import { getVaultPaths, resolveVaultPaths } from "../extensions/llm-wiki/lib/utils.js";
 import { createExecApi } from "./exec.js";
 import {
@@ -412,6 +413,22 @@ async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error("🧠 LLM Wiki MCP Server running on stdio");
+
+  // Fire-and-forget QMD index recovery AFTER the transport is connected so
+  // clients are never blocked. A busy/live lock just logs a warning and MCP
+  // continues with current state untouched.
+  if (hasVault()) {
+    const paths = getPaths();
+    recoverQmdIndex(paths)
+      .then((result) => {
+        if (!result.ok) {
+          console.error(
+            `[llm-wiki] QMD recovery skipped: ${result.diagnostics[0]?.message ?? "locked"}`,
+          );
+        }
+      })
+      .catch((err) => console.error(`[llm-wiki] QMD recovery failed: ${(err as Error).message}`));
+  }
 }
 
 main().catch((err) => {

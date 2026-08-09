@@ -11,7 +11,12 @@ import {
 import { hostname as osHostname } from "node:os";
 import { join } from "node:path";
 import type { KnowledgeDiagnostic } from "./knowledge-document.js";
-import { hashQmdManifest, readQmdManifest, reconcileQmdMirror } from "./qmd-mirror.js";
+import {
+  hashQmdManifest,
+  invalidateUnsafeQmdEntries,
+  readQmdManifest,
+  reconcileQmdMirror,
+} from "./qmd-mirror.js";
 import {
   QMD_PACKAGE_VERSION,
   type QmdResolvedModels,
@@ -676,6 +681,127 @@ export async function reindexQmdVault(
     }
   });
 }
+/**
+ * Safety-only path used after a metadata projection failure. Backfills/validates
+ * the vault id, removes only unsafe mirror entries (missing or rejected pages),
+ * and runs a lexical removal update only when entries were removed. Never adds
+ * or updates valid mirror pages after a projection failure.
+ */
+export async function invalidateQmdAfterProjectionFailure(
+  paths: VaultPaths,
+  deps?: Partial<QmdIndexDeps>,
+): Promise<void> {
+  await enqueue(paths.root, async () => {
+    await acquireIndexLock(paths);
+    try {
+      let vaultId: string;
+      try {
+        vaultId = await ensureVaultId(paths);
+      } catch {
+        return;
+      }
+      const result = await invalidateUnsafeQmdEntries(paths, vaultId);
+      if (result.counts.removed === 0) return;
+
+      const factory: QmdStoreFactory =
+        deps?.factory ?? (await import("./qmd-store.js")).openQmdIndexStore;
+      const fs = deps?.fs ?? realFs;
+
+      // Lexical removal update: copy current to staging, update, validate, swap.
+      const stagingName = `staging-${randomUUID()}`;
+      const staging = join(paths.qmd, stagingName);
+      await mkdir(staging, { recursive: true });
+      if (await fs.exists(join(paths.qmdCurrent, "index.sqlite"))) {
+        await fs.cp(paths.qmdCurrent, staging, { recursive: true, errorOnExist: true });
+      }
+
+      let totalDocuments = 0;
+      let canonicalDocuments = 0;
+      let evidenceDocuments = 0;
+      let needsEmbedding = 0;
+      let hasVectorIndex = false;
+      await withStore(
+        factory,
+        { dbPath: join(staging, "index.sqlite"), documentsPath: paths.qmdDocuments },
+        async (store) => {
+          await store.update();
+          const status = await store.status();
+          totalDocuments = status.totalDocuments;
+          canonicalDocuments = status.canonicalDocuments;
+          evidenceDocuments = status.evidenceDocuments;
+          needsEmbedding = status.needsEmbedding;
+          hasVectorIndex = status.hasVectorIndex;
+          const manifest = await readQmdManifest(paths, vaultId);
+          if (status.totalDocuments !== Object.keys(manifest.entries).length) {
+            throw new QmdIndexError(
+              "qmd_index_error",
+              `Indexed document count (${status.totalDocuments}) does not match manifest (${Object.keys(manifest.entries).length})`,
+            );
+          }
+        },
+      );
+
+      const models = resolveQmdModels();
+      await atomicWriteJson(join(staging, "index-state.json"), {
+        version: 1,
+        vaultId,
+        qmdVersion: QMD_PACKAGE_VERSION,
+        models,
+        manifestHash: result.manifestHash,
+        indexedAt: new Date().toISOString(),
+        status: {
+          totalDocuments,
+          canonicalDocuments,
+          evidenceDocuments,
+          needsEmbedding,
+          hasVectorIndex,
+        },
+      } as QmdIndexStateFile);
+
+      const journal: QmdSwapJournal = {
+        version: 1,
+        operationId: randomUUID(),
+        stagingName,
+        phase: "prepared",
+        startedAt: new Date().toISOString(),
+      };
+      await atomicWriteJson(paths.qmdSwap, journal);
+
+      const previous = join(paths.qmd, "previous");
+      if (await fs.exists(join(paths.qmdCurrent, "index.sqlite"))) {
+        await fs.rm(previous, { recursive: true, force: true });
+        await fs.rename(paths.qmdCurrent, previous);
+        journal.phase = "previous-moved";
+        await atomicWriteJson(paths.qmdSwap, journal);
+      }
+      await fs.rename(staging, paths.qmdCurrent);
+      journal.phase = "current-promoted";
+      await atomicWriteJson(paths.qmdSwap, journal);
+
+      await withStore(
+        factory,
+        { dbPath: join(paths.qmdCurrent, "index.sqlite"), documentsPath: paths.qmdDocuments },
+        async (store) => {
+          const status = await store.status();
+          if (status.totalDocuments !== totalDocuments) {
+            throw new QmdIndexError("qmd_index_error", "Promoted store validation failed");
+          }
+        },
+      );
+
+      journal.phase = "validated";
+      await atomicWriteJson(paths.qmdSwap, journal);
+      await fs.rm(previous, { recursive: true, force: true });
+      await fs.rm(paths.qmdSwap, { recursive: true, force: true });
+      await fsRm(join(paths.qmd, "last-error.json"), { recursive: true, force: true });
+    } catch {
+      // Generated QMD state is repairable; leave current intact. Status shows stale/error.
+    } finally {
+      await releaseIndexLock(paths);
+    }
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Generated status
 // ---------------------------------------------------------------------------

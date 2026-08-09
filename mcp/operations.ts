@@ -9,6 +9,7 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { bootstrapVault } from "../extensions/llm-wiki/lib/bootstrap.js";
 import { type ProjectionResult, rebuildMetadata } from "../extensions/llm-wiki/lib/metadata.js";
+import { reindexQmdVault } from "../extensions/llm-wiki/lib/qmd-indexing.js";
 import { type RecallResult, searchWikiLayered } from "../extensions/llm-wiki/lib/recall.js";
 import { saveInsight } from "../extensions/llm-wiki/lib/retro.js";
 import { captureFile, captureText, captureUrl } from "../extensions/llm-wiki/lib/source-packet.js";
@@ -33,6 +34,22 @@ function projectionOutcome(
         ok: false,
         diagnostics: projection.diagnostics.map(({ code, message }) => ({ code, message })),
       };
+}
+
+/**
+ * Enqueue a post-projection lexical QMD pass. Model-free and repairable; never
+ * fails the authoritative write. Goes through the per-vault in-process queue.
+ */
+async function scheduleLexicalQmd(paths: VaultPaths): Promise<void> {
+  try {
+    await reindexQmdVault(paths, {
+      scope: "changed",
+      components: ["lexical"],
+      force: false,
+    });
+  } catch {
+    // Generated QMD state is repairable; an authoritative write must not fail.
+  }
 }
 
 /**
@@ -167,6 +184,7 @@ export async function retroOperation(
     const result = saveInsight(paths, slug, title, body, category, { rebuild: false });
     const projection = projectionOutcome(rebuildMetadata(paths));
     if (!projection.ok) return projection;
+    await scheduleLexicalQmd(paths);
     return { ok: true, slug: result.slug, sourcePagePath: result.sourcePagePath };
   } catch (error: unknown) {
     if (error instanceof VaultWriteError) {
@@ -224,6 +242,7 @@ export async function captureSourceOperation(
 
     const projection = projectionOutcome(rebuildMetadata(paths));
     if (!projection.ok) return projection;
+    await scheduleLexicalQmd(paths);
     return { ok: true, sourceId };
   } catch (error: unknown) {
     if (error instanceof VaultWriteError) {

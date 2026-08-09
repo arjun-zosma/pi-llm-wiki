@@ -11,6 +11,7 @@ import {
   registerObservationReminder,
   registerWikiObserve,
 } from "./lib/observation.js";
+import { recoverQmdIndex } from "./lib/qmd-indexing.js";
 import {
   formatRecallContext,
   registerWikiRecall,
@@ -178,6 +179,16 @@ export default function (pi: ExtensionAPI) {
       runtime,
       trajectoriesOn,
       sessionModelId: (ctx.model as { id?: string })?.id,
+    });
+
+    // Fire-and-forget QMD index recovery. Generated-state repair only — it must
+    // never block heuristic recall or the first-turn injection path.
+    runtime.launchTask(ctx, `qmd-recovery:${paths.root}`, async () => {
+      try {
+        await recoverQmdIndex(paths);
+      } catch (err) {
+        console.warn(`[llm-wiki] QMD index recovery failed: ${(err as Error).message}`);
+      }
     });
 
     // One-time, user-visible session notice announcing the full wiki loop

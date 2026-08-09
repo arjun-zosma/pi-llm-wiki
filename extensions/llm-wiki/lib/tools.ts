@@ -14,6 +14,7 @@ import {
 import { buildResolvedBacklinks } from "./knowledge-links.js";
 import { repairLegacyKnowledgeDocuments } from "./legacy-repair.js";
 import { type Registry, appendEvent, rebuildMetadata, rebuildMetadataLight } from "./metadata.js";
+import { reindexQmdVault } from "./qmd-indexing.js";
 import type { Runtime } from "./runtime.js";
 import { captureFile, captureText, captureUrl } from "./source-packet.js";
 import { parseModelRef } from "./task-config.js";
@@ -1119,6 +1120,22 @@ export function registerWikiRebuildMeta(pi: ExtensionAPI, runtime?: Runtime): vo
           const warnings = result.diagnostics.filter(
             (diagnostic) => diagnostic.severity === "warning",
           );
+          // After a successful projection, keep the generated QMD index in sync
+          // (model-free lexical pass). A QMD failure is a warning, never a
+          // projection failure.
+          const qmdResult = await reindexQmdVault(paths, {
+            scope: "changed",
+            components: ["lexical"],
+            force: false,
+          });
+          if (!qmdResult.ok) {
+            warnings.push({
+              severity: "warning" as const,
+              code: "qmd_index_error" as const,
+              path: paths.qmd,
+              message: qmdResult.errors[0]?.message ?? "QMD indexing failed",
+            });
+          }
           if (warnings.length > 0) {
             return `⚠️ LLM Wiki: metadata rebuilt with warnings — ${warnings
               .map((diagnostic) => `${diagnostic.code}: ${diagnostic.message}`)
