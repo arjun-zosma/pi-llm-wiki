@@ -25,6 +25,15 @@ describe("package structure", () => {
     expect(pkg.peerDependencies).toBeDefined();
     expect(pkg.peerDependencies["@mariozechner/pi-coding-agent"]).toBe("*");
     expect(pkg.peerDependencies.typebox).toBe("*");
+
+    expect(pkg.engines.node).toBe(">=22.0.0");
+    expect(pkg.dependencies["@tobilu/qmd"]).toBe("2.5.3");
+    expect(pkg.devDependencies.typescript).toBe("^5.9.3");
+    expect(pkg.pnpm.onlyBuiltDependencies).toEqual([
+      "better-sqlite3",
+      "node-llama-cpp",
+      "sqlite-vec",
+    ]);
   });
 
   it("should have a SKILL.md with valid frontmatter and schema content", () => {
