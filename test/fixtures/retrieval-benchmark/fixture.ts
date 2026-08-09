@@ -246,7 +246,10 @@ const groups: QueryGroup[] = [
       "search using both literal terms and concepts",
       "mix sparse and dense retrieval",
     ],
-    judgments: [canonical("concepts/hybrid-retrieval"), canonical("concepts/reciprocal-rank-fusion", 1)],
+    judgments: [
+      canonical("concepts/hybrid-retrieval"),
+      canonical("concepts/reciprocal-rank-fusion", 1),
+    ],
   },
   {
     key: "cards-vague",
@@ -259,7 +262,10 @@ const groups: QueryGroup[] = [
       "stop raw observations drowning good knowledge",
       "card first memory organization",
     ],
-    judgments: [canonical("concepts/canonical-memory-cards"), evidence("sources/user-card-first-decision")],
+    judgments: [
+      canonical("concepts/canonical-memory-cards"),
+      evidence("sources/user-card-first-decision"),
+    ],
   },
   {
     key: "zettelkasten-concept",
@@ -355,7 +361,10 @@ const groups: QueryGroup[] = [
       "why QMD alone is not enough",
       "candidate search plus wiki memory semantics",
     ],
-    judgments: [canonical("syntheses/second-brain-retrieval"), canonical("analyses/qmd-adoption-decision", 2)],
+    judgments: [
+      canonical("syntheses/second-brain-retrieval"),
+      canonical("analyses/qmd-adoption-decision", 2),
+    ],
   },
   {
     key: "unrelated-negative",

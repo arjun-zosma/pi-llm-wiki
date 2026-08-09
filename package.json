@@ -66,15 +66,9 @@
     "benchmark:retrieval:update": "node scripts/update-retrieval-baseline.mjs"
   },
   "pi": {
-    "extensions": [
-      "./extensions"
-    ],
-    "skills": [
-      "./skills"
-    ],
-    "prompts": [
-      "./prompts"
-    ],
+    "extensions": ["./extensions"],
+    "skills": ["./skills"],
+    "prompts": ["./prompts"],
     "image": "https://raw.githubusercontent.com/zosmaai/pi-llm-wiki/main/assets/screenshot.png",
     "mcpservers": {
       "llm-wiki": "node ./dist/mcp/index.js"

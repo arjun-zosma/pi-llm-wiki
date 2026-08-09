@@ -67,7 +67,10 @@ function idsForRole(judgments: BenchmarkJudgment[], role?: BenchmarkJudgment["ro
   );
 }
 
-function evaluateSlice(queries: BenchmarkQuery[], runById: Map<string, BenchmarkRun>): RetrievalMetrics {
+function evaluateSlice(
+  queries: BenchmarkQuery[],
+  runById: Map<string, BenchmarkRun>,
+): RetrievalMetrics {
   const judged = queries.filter((query) => query.judgments.length > 0);
   const canonical = queries.filter((query) => idsForRole(query.judgments, "canonical").size > 0);
   const evidence = queries.filter((query) => idsForRole(query.judgments, "evidence").size > 0);
@@ -112,13 +115,19 @@ function evaluateSlice(queries: BenchmarkQuery[], runById: Map<string, Benchmark
       mean(
         canonical.map((query) => {
           const relevant = idsForRole(query.judgments, "canonical");
-          return rankedFor(query).slice(0, 3).some((id) => relevant.has(id)) ? 1 : 0;
+          return rankedFor(query)
+            .slice(0, 3)
+            .some((id) => relevant.has(id))
+            ? 1
+            : 0;
         }),
       ),
     ),
     evidenceRecall20: round(
       mean(
-        evidence.map((query) => recallAt(rankedFor(query), idsForRole(query.judgments, "evidence"), 20)),
+        evidence.map((query) =>
+          recallAt(rankedFor(query), idsForRole(query.judgments, "evidence"), 20),
+        ),
       ),
     ),
     contradictionCoverage: round(

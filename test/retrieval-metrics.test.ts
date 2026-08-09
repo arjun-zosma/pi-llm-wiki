@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { BenchmarkQuery } from "./fixtures/retrieval-benchmark/fixture.js";
 import {
+  type BenchmarkRun,
   evaluateBenchmark,
   ndcgAt,
-  reciprocalRank,
   recallAt,
-  type BenchmarkRun,
+  reciprocalRank,
 } from "./helpers/retrieval-metrics.js";
 
 const queries: BenchmarkQuery[] = [
@@ -32,7 +32,11 @@ const queries: BenchmarkQuery[] = [
 ];
 
 const runs: BenchmarkRun[] = [
-  { queryId: "ranked", rankedPageIds: ["sources/b", "cards/a", "other/x"], autoPageIds: ["sources/b"] },
+  {
+    queryId: "ranked",
+    rankedPageIds: ["sources/b", "cards/a", "other/x"],
+    autoPageIds: ["sources/b"],
+  },
   { queryId: "negative", rankedPageIds: ["other/x"], autoPageIds: ["other/x"] },
 ];
 

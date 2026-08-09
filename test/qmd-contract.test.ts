@@ -1,12 +1,7 @@
-import { homedir, tmpdir } from "node:os";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  createStore,
-  type ExpandedQuery,
-  type QMDStore,
-  type SearchOptions,
-} from "@tobilu/qmd";
+import { type ExpandedQuery, type QMDStore, type SearchOptions, createStore } from "@tobilu/qmd";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const hybridQueries: ExpandedQuery[] = [
@@ -53,8 +48,14 @@ function modelFiles(): string[] {
 
 beforeAll(async () => {
   mkdirSync(docsPath, { recursive: true });
-  writeFileSync(join(docsPath, "auth.md"), "# Authentication\n\nUsers authenticate with signed access tokens.\n");
-  writeFileSync(join(docsPath, "cache.md"), "# Cache\n\nCache entries expire after five minutes.\n");
+  writeFileSync(
+    join(docsPath, "auth.md"),
+    "# Authentication\n\nUsers authenticate with signed access tokens.\n",
+  );
+  writeFileSync(
+    join(docsPath, "cache.md"),
+    "# Cache\n\nCache entries expire after five minutes.\n",
+  );
   store = await createStore({
     dbPath,
     config: {

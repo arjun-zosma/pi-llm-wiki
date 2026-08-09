@@ -1,11 +1,4 @@
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -14,12 +7,12 @@ import { searchWiki } from "../extensions/llm-wiki/lib/recall.js";
 import { ensureVaultStructure, getVaultPaths } from "../extensions/llm-wiki/lib/utils.js";
 import {
   BENCHMARK_VERSION,
+  type BenchmarkPage,
   benchmarkPages,
   benchmarkQueries,
-  type BenchmarkPage,
 } from "./fixtures/retrieval-benchmark/fixture.js";
 import { rootDir } from "./helpers.js";
-import { evaluateBenchmark, type BenchmarkRun } from "./helpers/retrieval-metrics.js";
+import { type BenchmarkRun, evaluateBenchmark } from "./helpers/retrieval-metrics.js";
 
 const baselinePath = join(
   rootDir,
@@ -98,9 +91,10 @@ describe("current heuristic retrieval benchmark", () => {
       writeFileSync(baselinePath, `${JSON.stringify(report, null, 2)}\n`);
     }
 
-    expect(existsSync(baselinePath), `Run pnpm benchmark:retrieval:update to create ${baselinePath}`).toBe(
-      true,
-    );
+    expect(
+      existsSync(baselinePath),
+      `Run pnpm benchmark:retrieval:update to create ${baselinePath}`,
+    ).toBe(true);
     expect(JSON.parse(readFileSync(baselinePath, "utf8"))).toEqual(report);
   });
 });
