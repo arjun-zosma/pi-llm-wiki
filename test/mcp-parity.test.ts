@@ -12,12 +12,17 @@ import {
   getVaultPaths,
 } from "../extensions/llm-wiki/lib/utils.js";
 import { inspectVaultFormat } from "../extensions/llm-wiki/lib/vault-format.js";
-import { getWikiStatus, searchRegistry } from "../extensions/llm-wiki/lib/wiki-service.js";
+import {
+  getWikiStatus,
+  reindexWiki,
+  searchRegistry,
+} from "../extensions/llm-wiki/lib/wiki-service.js";
 import { createExecApi } from "../mcp/exec.js";
 import {
   bootstrapOperation,
   captureSourceOperation,
   recallOperation,
+  reindexOperation,
   retroOperation,
   searchOperation,
   statusOperation,
@@ -205,7 +210,36 @@ describe("MCP parity with shared services", () => {
     );
   });
 
-  it("exactly six tools registered", () => {
+  it("reindex parity: MCP matches shared reindexWiki for lexical indexing", async () => {
+    mkdirSync(join(paths.wiki, "concepts"), { recursive: true });
+    writeFileSync(
+      join(paths.wiki, "concepts", "parity.md"),
+      "---\ntype: concept\ntitle: Parity Reindex\ndescription: Reindex parity\n---\n\n# Parity Reindex\n\nBody.",
+    );
+    rebuildMetadata(paths);
+
+    const piResult = await reindexWiki(paths, {
+      scope: "changed",
+      components: ["lexical"],
+      force: false,
+      vault: "active",
+    });
+    const mcpResult = await reindexOperation(paths, {
+      scope: "changed",
+      components: ["lexical"],
+      force: false,
+      vault: "active",
+    });
+
+    expect(mcpResult.vault).toBe(piResult.vault);
+    expect(mcpResult.results).toHaveLength(piResult.results.length);
+    for (let i = 0; i < piResult.results.length; i++) {
+      expect(mcpResult.results[i].root).toBe(piResult.results[i].root);
+      expect(mcpResult.results[i].result.ok).toBe(piResult.results[i].result.ok);
+    }
+  });
+
+  it("exactly seven tools registered", () => {
     const source = readFileSync(join(import.meta.dirname, "..", "mcp", "index.ts"), "utf-8");
     const tools = [...source.matchAll(/server\.registerTool\(\s*"([^"]+)"/g)].map((m) => m[1]);
     expect(tools).toEqual([
@@ -213,6 +247,7 @@ describe("MCP parity with shared services", () => {
       "wiki_recall",
       "wiki_search",
       "wiki_status",
+      "wiki_reindex",
       "wiki_retro",
       "wiki_capture_source",
     ]);

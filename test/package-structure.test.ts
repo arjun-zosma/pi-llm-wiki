@@ -126,6 +126,7 @@ describe("package structure", () => {
       "registerWikiLint",
       "registerWikiStatus",
       "registerWikiRebuildMeta",
+      "registerWikiReindex",
       "registerWikiLogEvent",
       "registerWikiWatch",
       "registerWikiRecall",

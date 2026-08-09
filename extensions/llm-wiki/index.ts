@@ -29,6 +29,7 @@ import {
   registerWikiLint,
   registerWikiLogEvent,
   registerWikiRebuildMeta,
+  registerWikiReindex,
   registerWikiReindexEmbeddings,
   registerWikiSearch,
   registerWikiStatus,
@@ -47,7 +48,7 @@ import { applySessionStartStatus } from "./lib/visible-status.js";
 /**
  * @zosmaai/pi-llm-wiki — LLM Wiki extension for Pi
  *
- * Registers 13 custom tools and installs guardrails (+3 agent-trajectory tools
+ * Registers 14 custom tools and installs guardrails (+3 agent-trajectory tools
  * when `llm-wiki.trajectories` is enabled — opt-in, off by default, issue #80):
  * - wiki_recall (layered: personal + project vaults)
  * - wiki_retro (lightweight: single markdown file)
@@ -76,6 +77,7 @@ export default function (pi: ExtensionAPI) {
   registerWikiLint(pi, runtime);
   registerWikiStatus(pi);
   registerWikiRebuildMeta(pi, runtime);
+  registerWikiReindex(pi);
   registerWikiReindexEmbeddings(pi, runtime);
   registerWikiLogEvent(pi);
   registerWikiWatch(pi);

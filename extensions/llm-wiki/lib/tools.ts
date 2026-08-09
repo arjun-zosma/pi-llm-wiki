@@ -34,7 +34,7 @@ import {
   inspectVaultFormat,
   inspectWritableVault,
 } from "./vault-format.js";
-import { getWikiStatus, searchRegistry } from "./wiki-service.js";
+import { getWikiStatus, reindexWiki, searchRegistry } from "./wiki-service.js";
 
 /**
  * All LLM Wiki custom tools.
@@ -1204,6 +1204,110 @@ export function registerWikiReindexEmbeddings(pi: ExtensionAPI, runtime?: Runtim
           return `✅ LLM Wiki: embeddings reindexed (${embedder.model}) — ${stats.embedded} embedded, ${stats.skipped} fresh, ${stats.pruned} pruned.`;
         },
       });
+    },
+  });
+}
+
+export function registerWikiReindex(pi: ExtensionAPI): void {
+  pi.registerTool({
+    name: "wiki_reindex",
+    label: "Wiki Reindex QMD",
+    description:
+      "Rebuild or repair the generated QMD index (meta/qmd) for the vault. " +
+      "Lexical indexing is model-free; selecting vectors may download " +
+      "approximately 2 GB of models on first use. Repair stale/error state. " +
+      "Active recall still uses the legacy heuristic until Phase 3.",
+    promptSnippet: "Rebuild the QMD search index",
+    promptGuidelines: [
+      "Use wiki_reindex to repair a stale, error, or recovering QMD index.",
+      "Lexical-only reindexing never loads a model.",
+      "Vector reindexing may download approximately 2 GB of models on first use.",
+    ],
+    parameters: Type.Object({
+      scope: Type.Optional(
+        Type.Union([Type.Literal("changed"), Type.Literal("all")], { default: "changed" }),
+      ),
+      components: Type.Optional(
+        Type.Array(Type.Union([Type.Literal("lexical"), Type.Literal("vectors")]), {
+          minItems: 1,
+          uniqueItems: true,
+          default: ["lexical", "vectors"],
+        }),
+      ),
+      force: Type.Optional(Type.Boolean({ default: false })),
+      vault: Type.Optional(
+        Type.Union(
+          [
+            Type.Literal("active"),
+            Type.Literal("personal"),
+            Type.Literal("project"),
+            Type.Literal("all"),
+          ],
+          { default: "active" },
+        ),
+      ),
+    }),
+    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+      const paths = getPaths(ctx.cwd);
+      const vaultCheck = inspectWritableVault(paths);
+      if (!vaultCheck.ok) {
+        return {
+          content: [
+            { type: "text", text: `Wiki vault error: ${vaultCheck.diagnostics[0].message}` },
+          ],
+          details: {
+            error: vaultCheck.diagnostics[0].code,
+            diagnostics: vaultCheck.diagnostics,
+          } as Record<string, unknown>,
+          isError: true,
+        };
+      }
+
+      const scope = params.scope ?? "changed";
+      const components = params.components ?? ["lexical", "vectors"];
+      const force = params.force === true;
+      const vault = params.vault ?? "active";
+      const lexicalOnly = components.length === 1 && components[0] === "lexical";
+
+      // Warn before any vector work so the operator expects a large download.
+      if (components.includes("vectors") && signal && signal.aborted) {
+        return {
+          content: [{ type: "text", text: "QMD reindex cancelled before it started." }],
+          details: { cancelled: true } as Record<string, unknown>,
+          isError: true,
+        };
+      }
+
+      const result = await reindexWiki(paths, {
+        scope,
+        components,
+        force,
+        vault,
+        signal,
+      });
+
+      const ok = result.results.every((r) => r.result.ok);
+      const lines = [
+        ok ? "✅ QMD indexing complete" : "⚠️ QMD indexing completed with errors",
+        ...result.results.map((r) => {
+          const st = r.result.status;
+          return `- ${r.label} (${r.root}): state=${st.state}, documents=${st.totalDocuments}, indexed=${r.result.documents.indexed}, updated=${r.result.documents.updated}, removed=${r.result.documents.removed}, vectors=${r.result.vectors.generated}`;
+        }),
+      ];
+      if (lexicalOnly) lines.push("Model-free lexical indexing — no model was downloaded.");
+      if (components.includes("vectors")) {
+        lines.push("⚠️ Vector indexing may download approximately 2 GB of models on first use.");
+      }
+      for (const r of result.results) {
+        for (const e of r.result.errors) lines.push(`- [${r.label}] ${e.code}: ${e.message}`);
+        for (const w of r.result.warnings) lines.push(`- [${r.label}] ${w.code}: ${w.message}`);
+      }
+
+      return {
+        content: [{ type: "text", text: lines.join("\n") }],
+        details: { scope, components, ...result } as Record<string, unknown>,
+        ...(ok ? {} : { isError: true }),
+      };
     },
   });
 }

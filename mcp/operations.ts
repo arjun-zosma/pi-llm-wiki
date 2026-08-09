@@ -18,7 +18,11 @@ import {
   inspectVaultFormat,
   inspectWritableVault,
 } from "../extensions/llm-wiki/lib/vault-format.js";
-import { getWikiStatus, searchRegistry } from "../extensions/llm-wiki/lib/wiki-service.js";
+import {
+  getWikiStatus,
+  reindexWiki,
+  searchRegistry,
+} from "../extensions/llm-wiki/lib/wiki-service.js";
 
 function projectionOutcome(
   projection: ProjectionResult,
@@ -104,6 +108,20 @@ export async function searchOperation(
     matches: result.matches,
     diagnostics: result.diagnostics.map((d) => ({ code: d.code, message: d.message })),
   };
+}
+
+/** Shared reindex operation: delegates to the shared reindexWiki operation. */
+export async function reindexOperation(
+  paths: VaultPaths,
+  input: {
+    scope?: "changed" | "all";
+    components?: Array<"lexical" | "vectors">;
+    force?: boolean;
+    vault?: "active" | "personal" | "project" | "all";
+    signal?: AbortSignal;
+  },
+): Promise<import("../extensions/llm-wiki/lib/wiki-service.js").WikiReindexResult> {
+  return reindexWiki(paths, input);
 }
 
 /** Shared status operation: delegates directly to wiki-service. */
