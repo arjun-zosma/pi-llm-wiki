@@ -2,6 +2,8 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { parse as parseYaml } from "yaml";
 import {
+  type HostKind,
+  detectHost,
   listGlobalSettingsFiles,
   listProjectSettingsFiles,
   resolveProjectSettingsPath,
@@ -102,6 +104,27 @@ export interface TaskConfig {
   notices?: boolean;
 
   /**
+   * Let the PERSONAL wiki act as this project's ambient vault when the project
+   * has no wiki of its own.
+   *
+   * Ambient surfaces are the ones that fire without the user asking: the
+   * session notice, the periodic observe/retro reminder, and `before_agent_start`
+   * recall injection. `resolveVaultRoot` falls back to the personal vault when
+   * a project has none, so with this on those surfaces speak up in EVERY
+   * directory once a personal vault exists — injecting reminders and unrelated
+   * cross-project recall hits into repositories where no wiki was initialized.
+   *
+   * Host-dependent default, because the two hosts disagree on what silence
+   * means for a globally installed plugin:
+   *   - pi  → `true`  (historical behavior, unchanged)
+   *   - omp → `false` (a repository without a wiki stays quiet)
+   *
+   * The wiki TOOLS are registered either way, so `/wiki-init` and
+   * `wiki_bootstrap` always work; only the unprompted injections are gated.
+   */
+  ambientPersonalVault?: boolean;
+
+  /**
    * Agent-trajectory working-memory (capture → distill → recall), issue #80.
    * OPT-IN, default OFF: only an explicit `trajectories: true` enables it.
    * When off, the trajectory tools are never registered (see index.ts), so
@@ -126,6 +149,19 @@ export const TASK_DEFAULTS: TaskConfig = {};
  */
 export function noticesEnabled(config: TaskConfig | undefined): boolean {
   return config?.notices !== false;
+}
+
+/**
+ * Resolve whether the personal vault may serve as this project's ambient
+ * vault. Explicit `ambientPersonalVault` wins; otherwise the host decides
+ * (see the field docs on {@link TaskConfig.ambientPersonalVault}).
+ */
+export function personalVaultIsAmbient(
+  config: TaskConfig | undefined,
+  host: HostKind = detectHost(),
+): boolean {
+  if (typeof config?.ambientPersonalVault === "boolean") return config.ambientPersonalVault;
+  return host === "pi";
 }
 
 /**
@@ -186,6 +222,10 @@ function readNamespacedConfig(path: string): Partial<TaskConfig> {
 
     if (typeof section.notices === "boolean") {
       out.notices = section.notices;
+    }
+
+    if (typeof section.ambientPersonalVault === "boolean") {
+      out.ambientPersonalVault = section.ambientPersonalVault;
     }
 
     if (typeof section.trajectories === "boolean") {

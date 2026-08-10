@@ -322,11 +322,20 @@ export function buildReminderText(): string {
  * `options.display` (issue #77) controls whether the reminder is shown to the
  * user (`true`, the default) or injected silently into model context only
  * (`false`). Pass a resolver so the live `notices` config is read at send time.
+ *
+ * `options.enabled` gates the reminder entirely — note that `display: false`
+ * still injects it into model context, so it is NOT a way to switch the
+ * reminder off. Callers pass a resolver that answers "does a wiki apply to the
+ * current working directory", evaluated per turn because the session can move.
  */
 export function registerObservationReminder(
   pi: ExtensionAPI,
   reminderState: ReminderState,
-  options?: { turnsBetweenReminders?: number; display?: boolean | (() => boolean) },
+  options?: {
+    turnsBetweenReminders?: number;
+    display?: boolean | (() => boolean);
+    enabled?: () => boolean;
+  },
 ): void {
   const REMINDER_INTERVAL = options?.turnsBetweenReminders ?? 5;
   const resolveDisplay = (): boolean => {
@@ -354,6 +363,10 @@ export function registerObservationReminder(
     // and queuing another reminder would duplicate them (issue: connection
     // errors cause multiple retries, each firing agent_end).
     if ("willRetry" in event && (event as { willRetry?: boolean }).willRetry) return;
+
+    // No wiki applies here: never nag, and never accumulate a pending reminder
+    // that would fire the moment the session moves into a wiki-bearing project.
+    if (options?.enabled && !options.enabled()) return;
 
     turnsSinceLastReminder++;
     if (turnsSinceLastReminder < REMINDER_INTERVAL) return;

@@ -20,7 +20,12 @@ import {
 } from "./lib/recall.js";
 import { registerWikiRetro } from "./lib/retro.js";
 import { registerBackgroundRuntime } from "./lib/runtime.js";
-import { loadTaskConfig, noticesEnabled, trajectoriesEnabled } from "./lib/task-config.js";
+import {
+  loadTaskConfig,
+  noticesEnabled,
+  personalVaultIsAmbient,
+  trajectoriesEnabled,
+} from "./lib/task-config.js";
 import {
   registerWikiBootstrap,
   registerWikiCaptureSource,
@@ -40,7 +45,11 @@ import {
   registerWikiDistillSkills,
   registerWikiRecallSkill,
 } from "./lib/trajectory.js";
-import { migrateDoubledPersonalVault, resolveVaultPaths } from "./lib/utils.js";
+import {
+  migrateDoubledPersonalVault,
+  resolveProjectVaultRoot,
+  resolveVaultPaths,
+} from "./lib/utils.js";
 import { inspectWritableVault } from "./lib/vault-format.js";
 import { applySessionStartStatus } from "./lib/visible-status.js";
 
@@ -67,6 +76,26 @@ export default function (pi: ExtensionAPI) {
   // Background-task lane (issues #64, #65): shared runtime for off-thread LLM
   // work. Created first so tools (e.g. wiki_ingest) can dispatch to it.
   const runtime = registerBackgroundRuntime(pi);
+
+  /**
+   * Does a wiki apply to the directory this session is working in?
+   *
+   * Gates every AMBIENT surface — the ones that speak without being asked:
+   * session bootstrap/notice, the periodic observe/retro reminder, and
+   * `before_agent_start` recall injection. Tools and commands are registered
+   * regardless, so `/wiki-init` remains the way in.
+   *
+   * `resolveVaultRoot` falls back to the personal vault when a project has
+   * none, which is why the ambient surfaces used to fire in EVERY directory
+   * once a personal vault existed — reminders and unrelated cross-project
+   * recall hits leaking into repositories that never initialized a wiki.
+   * Under omp that fallback is off by default (`llm-wiki.ambientPersonalVault`);
+   * under pi it stays on, preserving the historical behavior.
+   *
+   * Resolved per call, not once at load: `cwd` changes within a session.
+   */
+  const wikiAppliesTo = (cwd: string): boolean =>
+    resolveProjectVaultRoot(cwd) !== null || personalVaultIsAmbient(runtime.config);
 
   registerWikiBootstrap(pi);
   registerWikiCaptureSource(pi, runtime);
@@ -106,9 +135,11 @@ export default function (pi: ExtensionAPI) {
   registerWikiObserve(pi, runtime, reminderState);
   // Visible observe/retro reminder by default (issue #77); silenced when the
   // user sets `llm-wiki.notices: false`. Resolver reads the live config so the
-  // setting takes effect without a restart.
+  // setting takes effect without a restart. `display: false` still injects the
+  // reminder into model context, so the "no wiki here" case needs its own gate.
   registerObservationReminder(pi, reminderState, {
     display: () => noticesEnabled(runtime.config),
+    enabled: () => wikiAppliesTo(process.cwd()),
   });
 
   installGuardrails(pi, runtime);
@@ -136,6 +167,12 @@ export default function (pi: ExtensionAPI) {
       // Never let migration crash session start.
       console.warn(`[llm-wiki] doubled-dotdir migration skipped: ${(err as Error).message}`);
     }
+
+    // Ambient gate. `ensureConfig` first so an explicit
+    // `llm-wiki.ambientPersonalVault` is honored on the very first session —
+    // `runtime.config` is otherwise empty until the first `turn_start`.
+    runtime.ensureConfig(process.cwd());
+    if (!wikiAppliesTo(process.cwd())) return;
 
     const paths = resolveVaultPaths(process.cwd());
     if (!existsSync(join(paths.dotWiki, "config.json"))) {
@@ -168,9 +205,8 @@ export default function (pi: ExtensionAPI) {
 
     // Surface the "wiki active" badge and the active background task model
     // (issue #69), both gated by `llm-wiki.notices` (issue #77, regression
-    // fixed in #83, helper extracted in #84). `ensureConfig` MUST run first so
-    // the gate sees the loaded project settings.
-    runtime.ensureConfig(process.cwd());
+    // fixed in #83, helper extracted in #84). The `ensureConfig` above the
+    // ambient gate already loaded the project settings this reads.
     applySessionStartStatus({
       ui: ctx.ui,
       runtime,
@@ -196,6 +232,8 @@ export default function (pi: ExtensionAPI) {
   //    from the user's first prompt and update config via wiki_bootstrap.
   // 2. Search both personal + project vaults for relevant pages.
   pi.on("before_agent_start", async (event, ctx) => {
+    if (!wikiAppliesTo(process.cwd())) return;
+
     const paths = resolveVaultPaths(process.cwd());
     if (!existsSync(join(paths.dotWiki, "config.json"))) {
       return;
