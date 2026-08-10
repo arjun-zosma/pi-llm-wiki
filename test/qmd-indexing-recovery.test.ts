@@ -1,5 +1,13 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -433,5 +441,52 @@ describe("QMD index lock", () => {
     h.writeJournal({ garbage: true });
     await recoverQmdIndex(h.paths, h.deps);
     expect(existsSync(lockDir)).toBe(false);
+  });
+});
+
+describe("QMD stale staging cleanup", () => {
+  it("removes unreferenced staging directories with no journal", async () => {
+    const h = harness();
+    h.writeCurrent();
+    h.writeStaging(`staging-${randomUUID()}`);
+    h.writeStaging(`staging-${randomUUID()}`);
+    await recoverQmdIndex(h.paths, h.deps);
+    const stagingDirs = readdirSync(h.paths.qmd).filter((n) => n.startsWith("staging-"));
+    expect(stagingDirs).toEqual([]);
+    expect(existsSync(join(h.paths.qmdCurrent, ".marker"))).toBe(true);
+  });
+
+  it("keeps the journal-referenced staging and removes unrelated ones", async () => {
+    const h = harness();
+    h.writeCurrent();
+    const referenced = `staging-${randomUUID()}`;
+    h.writeStaging(referenced);
+    h.writeStaging(`staging-${randomUUID()}`);
+    h.writeJournal(journal(referenced, "prepared"));
+    await recoverQmdIndex(h.paths, h.deps);
+    // prepared phase removes the referenced staging as well.
+    const stagingDirs = readdirSync(h.paths.qmd).filter((n) => n.startsWith("staging-"));
+    expect(stagingDirs).toEqual([]);
+  });
+
+  it("removes nothing on a malformed journal", async () => {
+    const h = harness();
+    h.writeCurrent();
+    const stale = `staging-${randomUUID()}`;
+    h.writeStaging(stale);
+    h.writeJournal({ version: 99, operationId: "x", stagingName: "staging-abc", phase: "bogus" });
+    await recoverQmdIndex(h.paths, h.deps);
+    expect(existsSync(join(h.paths.qmd, stale))).toBe(true);
+    expect(existsSync(h.paths.qmdSwap)).toBe(true);
+  });
+
+  it("never removes arbitrary unknown entries under meta/qmd", async () => {
+    const h = harness();
+    h.writeCurrent();
+    const unknown = join(h.paths.qmd, "custom-thing");
+    mkdirSync(unknown, { recursive: true });
+    writeFileSync(join(unknown, "keep.txt"), "x");
+    await recoverQmdIndex(h.paths, h.deps);
+    expect(existsSync(join(unknown, "keep.txt"))).toBe(true);
   });
 });

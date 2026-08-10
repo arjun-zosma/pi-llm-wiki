@@ -1,11 +1,12 @@
 import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
+import { type Dirent, existsSync } from "node:fs";
 import {
   cp as fsCp,
   rename as fsRename,
   rm as fsRm,
   mkdir,
   readFile,
+  readdir,
   writeFile,
 } from "node:fs/promises";
 import { hostname as osHostname } from "node:os";
@@ -267,24 +268,43 @@ export function awaitQmdIndexQueue(root: string): Promise<unknown> {
 
 export async function ensureVaultId(paths: VaultPaths): Promise<string> {
   const configPath = join(paths.dotWiki, "config.json");
-  const config = (await readJsonFile<Record<string, unknown>>(configPath)) ?? {};
-  if (typeof config.vault_id === "string") {
-    if (!UUID.test(config.vault_id)) {
+  const configRead = await readJsonArtifact<unknown>(configPath);
+  // Missing, unreadable, malformed, null, or array config is an error and must
+  // never become `{}` (which would let backfill overwrite the original bytes).
+  if (configRead.kind === "missing") {
+    throw new QmdIndexError(
+      "config_invalid",
+      "config.json is missing; cannot confirm or create a vault identity",
+    );
+  }
+  if (configRead.kind === "invalid") {
+    throw new QmdIndexError(
+      "config_invalid",
+      `config.json is unreadable or malformed: ${configRead.message}`,
+    );
+  }
+  const config = configRead.value;
+  if (typeof config !== "object" || config === null || Array.isArray(config)) {
+    throw new QmdIndexError("config_invalid", "config.json must be a JSON object with a vault_id");
+  }
+  const record = config as Record<string, unknown>;
+  if (typeof record.vault_id === "string") {
+    if (!UUID.test(record.vault_id)) {
       throw new QmdIndexError(
         "config_invalid_vault_id",
         "config.json contains an invalid vault_id",
       );
     }
-    return config.vault_id;
+    return record.vault_id;
   }
-  if (config.vault_id !== undefined) {
+  if (record.vault_id !== undefined) {
     throw new QmdIndexError(
       "config_invalid_vault_id",
       "config.json contains a non-string vault_id",
     );
   }
   const vaultId = randomUUID();
-  await atomicWriteJson(configPath, { ...config, vault_id: vaultId });
+  await atomicWriteJson(configPath, { ...record, vault_id: vaultId });
   return vaultId;
 }
 
@@ -336,6 +356,35 @@ async function expectedDocumentCount(
 // ---------------------------------------------------------------------------
 
 /**
+ * Remove extension-owned staging directories under `paths.qmd` that are not
+ * referenced by the active journal. Only exact `staging-<uuid>` names are
+ * considered; symlinks and non-directories are never followed. Cleanup
+ * failures become safe diagnostics.
+ */
+async function removeUnreferencedStaging(
+  paths: VaultPaths,
+  referencedName: string | undefined,
+  fs: NonNullable<QmdIndexDeps["fs"]>,
+): Promise<void> {
+  let entries: Dirent[];
+  try {
+    entries = await readdir(paths.qmd, { withFileTypes: true });
+  } catch {
+    return; // qmd dir may not exist yet
+  }
+  for (const entry of entries) {
+    if (!STAGING_NAME.test(entry.name)) continue;
+    if (entry.name === referencedName) continue;
+    if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
+    try {
+      await fs.rm(join(paths.qmd, entry.name), { recursive: true, force: true });
+    } catch {
+      // Cleanup is best-effort; never mask the original indexing error.
+    }
+  }
+}
+
+/**
  * Recover an interrupted prior swap. Assumes the index lock is already held.
  * Handles both write-ahead journals (phase published before the destructive
  * rename it covers) and legacy post-operation journals (phase published after
@@ -353,7 +402,8 @@ async function recoverQmdIndexLocked(
 
   const journal = await readSwapJournal(paths);
   if (!journal) {
-    // Absent journal is fine. A malformed one is left untouched for inspection.
+    // Absent journal is fine. A malformed one is left untouched for inspection
+    // (including any staging dirs, which stay for the operator to inspect).
     if (await pathExists(paths.qmdSwap)) {
       diagnostics.push(
         diag(
@@ -363,9 +413,17 @@ async function recoverQmdIndexLocked(
           "QMD swap journal is malformed; leaving state untouched for inspection",
         ),
       );
+    } else {
+      // No journal: sweep stale staging directories left by a failed or
+      // cancelled pre-journal operation.
+      await removeUnreferencedStaging(paths, undefined, fs);
     }
     return { ok: true, diagnostics };
   }
+
+  // A valid journal references one staging dir; any other exact-pattern
+  // staging directories are stale leftovers and are swept while locked.
+  await removeUnreferencedStaging(paths, journal.stagingName, fs);
 
   const staging = join(paths.qmd, journal.stagingName);
   const current = paths.qmdCurrent;
@@ -620,6 +678,9 @@ export async function reindexQmdVault(
     }
     let vaultId: string | undefined;
     let manifestHash = "";
+    // The active staging dir is cleaned on pre-journal failure/cancellation
+    // (before a journal is published, the swap owns nothing yet).
+    let stagingName: string | undefined;
     try {
       checkCancelled(signal);
       // Always recover an interrupted prior swap first.
@@ -646,8 +707,9 @@ export async function reindexQmdVault(
       checkCancelled(signal);
       onProgress?.({ stage: "copy", message: "Preparing staging store" });
 
-      const stagingName = `staging-${randomUUID()}`;
-      const staging = join(paths.qmd, stagingName);
+      const name = `staging-${randomUUID()}`;
+      stagingName = name;
+      const staging = join(paths.qmd, name);
       await mkdir(staging, { recursive: true });
 
       // Copy the current store unless this is a forced lexical rebuild.
@@ -773,6 +835,11 @@ export async function reindexQmdVault(
         errors,
       };
     } catch (error: unknown) {
+      // Pre-journal failure/cancellation: remove this operation's staging
+      // copy. Once a journal references it, recovery owns the cleanup.
+      if (stagingName && !(await pathExists(paths.qmdSwap))) {
+        await fs.rm(join(paths.qmd, stagingName), { recursive: true, force: true });
+      }
       if (!(error instanceof QmdIndexCancelledError)) {
         const message = error instanceof Error ? error.message : String(error);
         errors.push({
@@ -824,6 +891,7 @@ export async function invalidateQmdAfterProjectionFailure(
       // the current state. Never remove a lock we do not own.
       return;
     }
+    let stagingName: string | undefined;
     try {
       let vaultId: string;
       try {
@@ -839,8 +907,9 @@ export async function invalidateQmdAfterProjectionFailure(
       const fs = deps?.fs ?? realFs;
 
       // Lexical removal update: copy current to staging, update, validate, swap.
-      const stagingName = `staging-${randomUUID()}`;
-      const staging = join(paths.qmd, stagingName);
+      const name = `staging-${randomUUID()}`;
+      stagingName = name;
+      const staging = join(paths.qmd, name);
       await mkdir(staging, { recursive: true });
       if (await fs.exists(join(paths.qmdCurrent, "index.sqlite"))) {
         await fs.cp(paths.qmdCurrent, staging, { recursive: true, errorOnExist: true });
@@ -892,7 +961,12 @@ export async function invalidateQmdAfterProjectionFailure(
       // Journaled swap with write-ahead phases, shared with normal reindexing.
       await promoteStagingToCurrent(paths, stagingName, factory, fs);
     } catch {
-      // Generated QMD state is repairable; leave current intact. Status shows stale/error.
+      // Pre-journal failure: remove this operation's staging copy. Once a
+      // journal references it, recovery owns the cleanup. Generated QMD state
+      // is repairable; leave current intact. Status shows stale/error.
+      if (stagingName && !(await pathExists(paths.qmdSwap))) {
+        await fsRm(join(paths.qmd, stagingName), { recursive: true, force: true });
+      }
     } finally {
       await releaseIndexLock(paths);
     }

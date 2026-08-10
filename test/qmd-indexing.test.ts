@@ -1,5 +1,13 @@
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -633,3 +641,148 @@ function hashOf(manifest: unknown): string {
     .update(JSON.stringify({ version: m.version, vaultId: m.vaultId, entries }))
     .digest("hex");
 }
+
+// ---------------------------------------------------------------------------
+// Task 3: fail-closed config + staging cleanup
+// ---------------------------------------------------------------------------
+
+describe("QMD config fail-closed", () => {
+  it("preserves malformed config and creates no generated state", async () => {
+    const paths = tempVault();
+    writePage(paths, "concepts/a.md", "A");
+    const configPath = join(paths.dotWiki, "config.json");
+    writeFileSync(configPath, "{not-json");
+
+    const result = await reindexQmdVault(paths, { scope: "changed", components: ["lexical"] });
+    expect(result.ok).toBe(false);
+    expect(readFileSync(configPath, "utf8")).toBe("{not-json");
+    expect(result.errors.some((e) => e.code === "config_invalid")).toBe(true);
+    expect(existsSync(join(paths.qmd, "current"))).toBe(false);
+    expect(existsSync(paths.qmdManifest)).toBe(false);
+  });
+
+  it("rejects a JSON array config without touching it", async () => {
+    const paths = tempVault();
+    writePage(paths, "concepts/a.md", "A");
+    const configPath = join(paths.dotWiki, "config.json");
+    writeFileSync(configPath, JSON.stringify([1, 2, 3]));
+
+    const result = await reindexQmdVault(paths, { scope: "changed", components: ["lexical"] });
+    expect(result.ok).toBe(false);
+    expect(readFileSync(configPath, "utf8")).toBe(JSON.stringify([1, 2, 3]));
+    expect(existsSync(paths.qmdManifest)).toBe(false);
+  });
+
+  it("errors on a directory at config.json without removing it", async () => {
+    const paths = tempVault();
+    writePage(paths, "concepts/a.md", "A");
+    const configPath = join(paths.dotWiki, "config.json");
+    rmSync(configPath, { force: true });
+    mkdirSync(configPath);
+
+    const result = await reindexQmdVault(paths, { scope: "changed", components: ["lexical"] });
+    expect(result.ok).toBe(false);
+    expect(existsSync(configPath)).toBe(true);
+    const stat = await (await import("node:fs/promises")).stat(configPath);
+    expect(stat.isDirectory()).toBe(true);
+    expect(existsSync(paths.qmdManifest)).toBe(false);
+  });
+});
+
+describe("QMD staging cleanup", () => {
+  it("removes staging when the store update fails before journal publication", async () => {
+    const paths = tempVault();
+    writePage(paths, "concepts/a.md", "A");
+    const first = await reindexQmdVault(paths, { scope: "changed", components: ["lexical"] });
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+
+    const failingFactory: QmdStoreFactory = async () => ({
+      update: async () => {
+        throw new Error("staging update exploded");
+      },
+      embed: async () => {
+        throw new Error("nope");
+      },
+      status: async () => {
+        throw new Error("nope");
+      },
+      close: async () => {},
+    });
+
+    const result = await reindexQmdVault(
+      paths,
+      { scope: "changed", components: ["lexical"], force: false },
+      { factory: failingFactory },
+    );
+    expect(result.ok).toBe(false);
+    const stagingDirs = readdirSync(paths.qmd).filter((n) => n.startsWith("staging-"));
+    expect(stagingDirs).toEqual([]);
+  });
+
+  it("removes staging when staging validation fails before journal publication", async () => {
+    const paths = tempVault();
+    writePage(paths, "concepts/a.md", "A");
+    const { factory } = fakeFactory({ totalDocuments: 99 }); // mismatch with manifest
+    const result = await reindexQmdVault(
+      paths,
+      { scope: "changed", components: ["lexical"] },
+      { factory },
+    );
+    expect(result.ok).toBe(false);
+    const stagingDirs = readdirSync(paths.qmd).filter((n) => n.startsWith("staging-"));
+    expect(stagingDirs).toEqual([]);
+  });
+
+  it("removes staging when cancelled mid-update", async () => {
+    const paths = tempVault();
+    writePage(paths, "concepts/a.md", "A");
+    const first = await reindexQmdVault(paths, { scope: "changed", components: ["lexical"] });
+    expect(first.ok).toBe(true);
+
+    const controller = new AbortController();
+    const cancellingFactory: QmdStoreFactory = async () => ({
+      update: async () => {
+        controller.abort();
+        return {
+          collections: 2,
+          indexed: 1,
+          updated: 0,
+          unchanged: 0,
+          removed: 0,
+          needsEmbedding: 1,
+        };
+      },
+      embed: async () => ({ docsProcessed: 1, chunksEmbedded: 2, errors: 0, durationMs: 1 }),
+      status: async () => ({
+        totalDocuments: 1,
+        needsEmbedding: 0,
+        hasVectorIndex: false,
+        canonicalDocuments: 1,
+        evidenceDocuments: 0,
+      }),
+      close: async () => {},
+    });
+
+    const result = await reindexQmdVault(
+      paths,
+      { scope: "changed", components: ["lexical"], signal: controller.signal },
+      { factory: cancellingFactory },
+    );
+    expect(result.ok).toBe(false);
+    const stagingDirs = readdirSync(paths.qmd).filter((n) => n.startsWith("staging-"));
+    expect(stagingDirs).toEqual([]);
+  });
+
+  it("keeps arbitrary unknown files under meta/qmd untouched", async () => {
+    const paths = tempVault();
+    writePage(paths, "concepts/a.md", "A");
+    const unknownDir = join(paths.qmd, "custom-thing");
+    mkdirSync(unknownDir, { recursive: true });
+    writeFileSync(join(unknownDir, "keep.txt"), "x");
+
+    const result = await reindexQmdVault(paths, { scope: "changed", components: ["lexical"] });
+    expect(result.ok).toBe(true);
+    expect(existsSync(join(unknownDir, "keep.txt"))).toBe(true);
+  });
+});
