@@ -1,4 +1,12 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -6,7 +14,9 @@ import {
   getPersonalWikiPaths,
   getPersonalWikiRoot,
   getVaultPaths,
+  isPersonalVault,
   migrateDoubledPersonalVault,
+  resolveVaultPaths,
 } from "../extensions/llm-wiki/lib/utils.js";
 
 /**
@@ -165,5 +175,94 @@ describe("migrateDoubledPersonalVault", () => {
     // And the migrated content is reachable through the standard paths.
     const sources = readdirSync(join(paths.wiki, "sources"));
     expect(sources).toContain("note.md");
+  });
+});
+
+/**
+ * Regression suite for issue #145: `isPersonalVault()` compared root strings,
+ * so on image-based ("atomic") Linux distributions — where `/home` is a
+ * symlink to `var/home` — the personal vault was classified as a project
+ * vault.
+ *
+ * `homedir()` returns the `$HOME` string (`/home/u`), but `process.cwd()`
+ * resolves symlinks, so `resolveVaultRoot()`'s parent walk returns
+ * `/var/home/u`. Both name the same directory; only the strings differ.
+ * The consequences were a doubled layered-recall scan of one vault (every hit
+ * mislabelled "📓 personal") and a doubled `vaultPageCount()`, which tripped
+ * links-first rendering at half the configured threshold.
+ */
+describe("isPersonalVault on a symlinked home (atomic OS layout)", () => {
+  let scratch: string;
+  let physicalHome: string;
+  let symlinkedHome: string;
+  let savedWikiHome: string | undefined;
+  let savedHome: string | undefined;
+
+  beforeEach(() => {
+    savedWikiHome = process.env.WIKI_HOME;
+    savedHome = process.env.HOME;
+    scratch = join(tmpdir(), `llm-wiki-symlink-${Math.random().toString(36).slice(2)}`);
+
+    // Physical layout: <scratch>/var/home/u, reached via <scratch>/home -> var/home.
+    physicalHome = join(scratch, "var", "home", "u");
+    symlinkedHome = join(scratch, "home", "u");
+    mkdirSync(join(physicalHome, ".llm-wiki"), { recursive: true });
+    writeFileSync(join(physicalHome, ".llm-wiki", "config.json"), "{}");
+    symlinkSync("var/home", join(scratch, "home"));
+  });
+
+  afterEach(() => {
+    if (savedWikiHome === undefined) Reflect.deleteProperty(process.env, "WIKI_HOME");
+    else process.env.WIKI_HOME = savedWikiHome;
+    if (savedHome === undefined) Reflect.deleteProperty(process.env, "HOME");
+    else process.env.HOME = savedHome;
+    rmSync(scratch, { recursive: true, force: true });
+  });
+
+  it("recognises the personal vault reached through a symlinked root", () => {
+    // WIKI_HOME points at the symlinked path; the vault root is the physical
+    // one. Before the fix this string compare returned false.
+    process.env.WIKI_HOME = symlinkedHome;
+    expect(isPersonalVault(getVaultPaths(physicalHome))).toBe(true);
+  });
+
+  it("recognises it from the symlinked side too (comparison is symmetric)", () => {
+    process.env.WIKI_HOME = physicalHome;
+    expect(isPersonalVault(getVaultPaths(symlinkedHome))).toBe(true);
+  });
+
+  it("classifies the vault resolved from a physical cwd as personal", () => {
+    // The real atomic-OS path: $HOME uses the symlink, but process.cwd() (and
+    // so resolveVaultRoot's parent walk) yields the physical path. WIKI_HOME
+    // must be unset or it short-circuits the walk.
+    Reflect.deleteProperty(process.env, "WIKI_HOME");
+    process.env.HOME = symlinkedHome;
+    const cwd = join(physicalHome, "proj", "src");
+    mkdirSync(cwd, { recursive: true });
+
+    const paths = resolveVaultPaths(cwd);
+    expect(paths.root).toBe(physicalHome); // walked up to the physical root
+    expect(isPersonalVault(paths)).toBe(true);
+  });
+
+  it("still treats a vault nested under the home directory as a project vault", () => {
+    // Guards against fixing this with containment instead of equality.
+    process.env.WIKI_HOME = symlinkedHome;
+    const nested = join(physicalHome, "projects", "foo");
+    mkdirSync(join(nested, ".llm-wiki"), { recursive: true });
+    expect(isPersonalVault(getVaultPaths(nested))).toBe(false);
+  });
+
+  it("still treats an unrelated vault as a project vault", () => {
+    process.env.WIKI_HOME = symlinkedHome;
+    const unrelated = join(scratch, "var", "srv", "other");
+    mkdirSync(join(unrelated, ".llm-wiki"), { recursive: true });
+    expect(isPersonalVault(getVaultPaths(unrelated))).toBe(false);
+  });
+
+  it("does not throw when the personal root does not exist on disk", () => {
+    process.env.WIKI_HOME = join(scratch, "nonexistent", "home");
+    expect(() => isPersonalVault(getVaultPaths(physicalHome))).not.toThrow();
+    expect(isPersonalVault(getVaultPaths(physicalHome))).toBe(false);
   });
 });

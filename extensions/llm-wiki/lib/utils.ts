@@ -120,9 +120,29 @@ export function migrateDoubledPersonalVault(
 /**
  * Check if a vault is the personal wiki location.
  * Used in layered recall to avoid double-counting.
+ *
+ * Compares PHYSICAL paths, not strings. On image-based ("atomic") Linux
+ * distributions `/home` is a symlink to `var/home`, so `homedir()` yields the
+ * `$HOME` string (`/home/u`) while `process.cwd()` — and therefore the root
+ * `resolveVaultRoot()` walks up to — yields `/var/home/u`. A string compare
+ * calls the personal vault a project vault, which makes layered recall search
+ * the same vault twice and `vaultPageCount()` double-count it.
+ *
+ * Exact equality, NOT containment: a vault nested under the home directory
+ * (`~/projects/foo/.llm-wiki`) is a project vault and must stay one.
  */
 export function isPersonalVault(paths: VaultPaths): boolean {
-  return paths.root === getPersonalWikiRoot();
+  const personalRoot = getPersonalWikiRoot();
+  // Fast path: identical strings need no filesystem syscalls.
+  if (paths.root === personalRoot) return true;
+  try {
+    return relativePhysicalPath(personalRoot, paths.root) === "";
+  } catch {
+    // Unresolvable path (permissions, symlink cycle): fall back to "not
+    // personal" so layered recall degrades to searching both vaults rather
+    // than silently dropping the personal layer.
+    return false;
+  }
 }
 
 /**
