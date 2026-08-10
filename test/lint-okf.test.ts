@@ -462,6 +462,49 @@ describe("QMD status and lint diagnostics", () => {
       hasUI: false,
     });
     expect(result.content[0].text).toContain("QMD index stale");
-    expect(result.content[0].text).toContain("wiki_reindex");
+    expect(result.content[0].text).toContain(
+      'wiki_reindex(scope="changed", components=["lexical"], vault="active")',
+    );
+    expect(result.content[0].text).not.toContain('components=["lexical, vectors"]');
+  });
+
+  it("suggests vectors repair when the embedding model changed", async () => {
+    const paths = getVaultPaths(root);
+    ensureVaultStructure(paths);
+    writeFileSync(
+      join(paths.dotWiki, "config.json"),
+      JSON.stringify({ topic: "Q", mode: "personal" }),
+    );
+    mkdirSync(join(paths.wiki, "concepts"), { recursive: true });
+    writeFileSync(
+      join(paths.wiki, "concepts", "a.md"),
+      "---\ntype: concept\n---\n\nCanonical concept.\n",
+    );
+
+    const res = await reindexQmdVault(paths, { scope: "changed", components: ["lexical"] });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+
+    // Simulate an embedding model change in the recorded state.
+    const statePath = join(paths.qmdCurrent, "index-state.json");
+    const state = JSON.parse(readFileSync(statePath, "utf8"));
+    state.models.embed = "text-embedding-3-large";
+    writeFileSync(statePath, JSON.stringify(state));
+
+    let lintTool: TestTool | undefined;
+    registerWikiLint({
+      registerTool: (definition: unknown) => {
+        lintTool = definition as TestTool;
+      },
+    } as unknown as ExtensionAPI);
+    if (!lintTool) throw new Error("wiki_lint was not registered");
+    const result = await lintTool.execute("test", { auto_fix: false }, undefined, undefined, {
+      cwd: root,
+      hasUI: false,
+    });
+    expect(result.content[0].text).toContain(
+      'wiki_reindex(scope="changed", components=["vectors"], vault="active")',
+    );
+    expect(result.content[0].text).not.toContain('components=["lexical, vectors"]');
   });
 });

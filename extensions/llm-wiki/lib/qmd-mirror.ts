@@ -270,10 +270,17 @@ export async function reconcileQmdMirror(
     const priorEntry = prior.entries[key];
     const mirrorPath = manifestKeyToPath(paths, key);
     const content = serializedByKey.get(key) ?? "";
-    if (scope === "all" || !priorEntry || priorEntry.contentHash !== entry.contentHash) {
-      await atomicWrite(mirrorPath, content);
-      if (!priorEntry) counts.indexed++;
-      else if (priorEntry.contentHash !== entry.contentHash) counts.updated++;
+    const changed = !priorEntry || priorEntry.contentHash !== entry.contentHash;
+    if (scope === "all" || changed) {
+      // Full scope still rewrites every file; count unchanged pages by their
+      // content identity so the totals reconcile with the final manifest.
+      if (changed) {
+        await atomicWrite(mirrorPath, content);
+        if (!priorEntry) counts.indexed++;
+        else counts.updated++;
+      } else {
+        counts.unchanged++;
+      }
     } else {
       counts.unchanged++;
     }

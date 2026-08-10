@@ -48,7 +48,8 @@ off by default** (issue #80) — registered only when `llm-wiki.trajectories` is
 
 `wiki_reindex` maintains the generated search index under `meta/qmd` (validated mirrors + a SQLite
 store). It is generated and rebuildable; stale/error/recovering state is repaired by re-running the tool.
-Active recall still uses the legacy heuristic until Phase 3.
+The swap journal is write-ahead intent and recovery re-checks the filesystem, so an interrupted promotion
+never loses the last usable `current`. Active recall still uses the legacy heuristic until Phase 3.
 
 ## Workflows
 

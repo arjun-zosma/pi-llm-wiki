@@ -408,3 +408,22 @@ describe("QMD manifest strict validation", () => {
     expect(Object.keys(manifest.entries)).toHaveLength(0);
   });
 });
+
+describe("QMD mirror full-scope accounting", () => {
+  it("counts every accepted page as unchanged on full-scope rewrite of identical content", async () => {
+    const paths = tempVault();
+    const vaultId = randomUUID();
+    mkdirSync(join(paths.wiki, "concepts"), { recursive: true });
+    writeFileSync(join(paths.wiki, "concepts", "card.md"), makePage("concept", "Card"));
+
+    const first = await reconcileQmdMirror(paths, vaultId, "all");
+    expect(first.counts.indexed).toBe(1);
+    const second = await reconcileQmdMirror(paths, vaultId, "all");
+    expect(second.counts.indexed).toBe(0);
+    expect(second.counts.updated).toBe(0);
+    expect(second.counts.unchanged).toBe(1);
+    expect(second.counts.indexed + second.counts.updated + second.counts.unchanged).toBe(
+      Object.keys(second.manifest.entries).length,
+    );
+  });
+});

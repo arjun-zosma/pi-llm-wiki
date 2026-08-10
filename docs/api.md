@@ -322,13 +322,15 @@ wiki_reindex(
 )
 ```
 
-- `scope`: `changed` hashes and skips unchanged mirrors; `all` rewrites every accepted file.
+- `scope`: `changed` hashes and skips unchanged mirrors; `all` rewrites every accepted file (unchanged pages are still counted as `unchanged`).
 - `components`: `vectors` first refreshes documents; `lexical`-only never loads a model. Default: `components: ["lexical", "vectors"]`.
 - `force`: applies only to the selected components (a forced lexical rebuild starts from an empty staging store).
 - `vault`: which vaults to reindex. `all` reports each vault independently.
 
 Selecting `vectors` may download approximately 2 GB of models on first use. Cancellation and failures retain
-the last usable `current` store; stale/error/recovering state is repaired by re-running this tool. Do not copy,
+the last usable `current` store; stale/error/recovering state is repaired by re-running this tool. The swap
+journal is write-ahead intent — each phase is published before the destructive rename it covers, and recovery
+also checks filesystem state, so interrupted promotions are restored or rolled back rather than guessed. Do not copy,
 partially restore, or edit individual SQLite/WAL/SHM files inside `current` — restore the whole directory or rebuild.
 
 **Returns**

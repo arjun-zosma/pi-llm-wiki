@@ -100,6 +100,10 @@ meta/qmd/
 - Canonical and evidence collections never overlap.
 - Ordinary write-triggered updates are **lexical and model-free**; `vectors` may download ~2 GB on first use.
 - The live store is replaced atomically via a recoverable copy-on-write swap; failures retain the last usable `current`.
+- `swap.json` is a **write-ahead journal**: each phase is published before the destructive rename it covers, and recovery re-checks the filesystem, so every crash window restores a usable `current` or an explicit missing/error state.
+- Stale `staging-<uuid>` directories left by failed or cancelled pre-journal work are extension-owned and swept while the per-vault lock is held; recovery never touches arbitrary names under `meta/qmd`.
+- Malformed generated artifacts (`swap.json`, `manifest.json`, `index-state.json`) report `error`, never `missing` or `ready`.
+- Generated status exposes `repairComponents` (valid tool component values) so lint can suggest an exact `wiki_reindex` command. `vectors` refreshes documents before embedding, so `components=["vectors"]` repairs stale vectors and their document index together.
 - Do not copy, partially restore, or edit individual SQLite/WAL/SHM files inside `current` — restore the whole directory or rebuild.
 - Full-vault backups include generated searchable text; OKF-only exports do not.
 

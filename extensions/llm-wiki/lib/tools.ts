@@ -987,9 +987,11 @@ async function runWikiLint(paths: VaultPaths, autoFix: boolean): Promise<string>
 
   const qmdFindings: string[] = [];
   if (qmdStatus.state === "stale") {
-    const components = qmdStatus.hasVectorIndex ? "lexical" : "lexical, vectors";
+    const components = JSON.stringify(
+      qmdStatus.repairComponents.length > 0 ? qmdStatus.repairComponents : ["lexical"],
+    );
     qmdFindings.push(
-      `- QMD index stale (${qmdStatus.indexedManifestHash ? "manifest or model changed" : ""}): repair with \`wiki_reindex(scope=\"changed\", components=[\"${components}\"], vault=\"active\")\``,
+      `- QMD index stale (${qmdStatus.indexedManifestHash ? "manifest or model changed" : ""}): repair with \`wiki_reindex(scope=\"changed\", components=${components}, vault=\"active\")\``,
     );
   } else if (qmdStatus.state === "recovering") {
     qmdFindings.push(
@@ -997,7 +999,7 @@ async function runWikiLint(paths: VaultPaths, autoFix: boolean): Promise<string>
     );
   } else if (qmdStatus.state === "error") {
     qmdFindings.push(
-      `- QMD index error: ${qmdStatus.issues[0]?.message ?? "repair with wiki_reindex"} — \`wiki_reindex(scope=\"changed\", components=[\"lexical\"], vault=\"active\")\``,
+      `- QMD index error: ${qmdStatus.issues[0]?.message ?? "repair with wiki_reindex"} — \`wiki_reindex(scope=\"changed\", components=${JSON.stringify(qmdStatus.repairComponents.length > 0 ? qmdStatus.repairComponents : ["lexical"])}, vault=\"active\")\``,
     );
   } else if (qmdStatus.state === "missing") {
     qmdFindings.push("- QMD index not built yet (informational): run wiki_reindex to build it");
