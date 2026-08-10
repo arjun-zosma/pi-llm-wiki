@@ -1,3 +1,4 @@
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,6 +9,7 @@ import {
   readQmdIndexStatus,
   reindexQmdVault,
 } from "../extensions/llm-wiki/lib/qmd-indexing.js";
+import { QMD_PACKAGE_VERSION, resolveQmdModels } from "../extensions/llm-wiki/lib/qmd-store.js";
 import { ensureVaultStructure, getVaultPaths } from "../extensions/llm-wiki/lib/utils.js";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -381,3 +383,253 @@ describe("QMD vault reindexing", () => {
     expect(observed).toEqual(["previous-moved:current", "current-promoted:staging"]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Generated status artifact matrix (Task 2)
+// ---------------------------------------------------------------------------
+
+interface StatusVault {
+  paths: ReturnType<typeof getVaultPaths>;
+  vaultId: string;
+}
+
+function statusVault(): StatusVault {
+  const paths = tempVault();
+  writeFileSync(
+    join(paths.dotWiki, "config.json"),
+    JSON.stringify({ topic: "Status", vault_id: "11111111-1111-4111-8111-111111111111" }),
+  );
+  return { paths, vaultId: "11111111-1111-4111-8111-111111111111" };
+}
+
+function validStateFile(v: StatusVault, opts: { manifestHash?: string } = {}) {
+  return {
+    version: 1,
+    vaultId: v.vaultId,
+    qmdVersion: QMD_PACKAGE_VERSION,
+    models: resolveQmdModels(),
+    manifestHash: opts.manifestHash ?? "0".repeat(64),
+    indexedAt: "2026-08-09T00:00:00.000Z",
+    status: {
+      totalDocuments: 2,
+      canonicalDocuments: 1,
+      evidenceDocuments: 1,
+      needsEmbedding: 0,
+      hasVectorIndex: false,
+    },
+  };
+}
+
+function validManifest(v: StatusVault) {
+  return {
+    version: 1,
+    vaultId: v.vaultId,
+    entries: {
+      "documents/canonical/concepts/a.md": {
+        sourcePath: join(v.paths.wiki, "concepts/a.md"),
+        vaultId: v.vaultId,
+        pageId: "concepts/a",
+        contentHash: "a".repeat(64),
+        role: "canonical",
+        type: "concept",
+      },
+    },
+  };
+}
+
+function writeArtifact(path: string, content: unknown): void {
+  mkdirSync(path.split("/").slice(0, -1).join("/"), { recursive: true });
+  writeFileSync(path, typeof content === "string" ? content : JSON.stringify(content));
+}
+
+describe("QMD generated status artifact matrix", () => {
+  it("reports missing with no artifacts", async () => {
+    const v = statusVault();
+    const status = await readQmdIndexStatus(v.paths);
+    expect(status.state).toBe("missing");
+    expect(status.repairComponents).toEqual([]);
+  });
+
+  it("reports error for malformed manifest JSON", async () => {
+    const v = statusVault();
+    writeArtifact(v.paths.qmdManifest, "{not-json");
+    const status = await readQmdIndexStatus(v.paths);
+    expect(status.state).toBe("error");
+    expect(status.issues.some((i) => i.code === "qmd_manifest_invalid")).toBe(true);
+  });
+
+  it("reports error for a structurally invalid manifest entry", async () => {
+    const v = statusVault();
+    const manifest = validManifest(v);
+    (manifest.entries as Record<string, unknown>)["documents/concepts/a.md"] = {
+      pageId: "concepts/a",
+      role: "canonical",
+    }; // missing sourcePath/contentHash/type/vaultId
+    writeArtifact(v.paths.qmdManifest, manifest);
+    const status = await readQmdIndexStatus(v.paths);
+    expect(status.state).toBe("error");
+    expect(status.issues.some((i) => i.code === "qmd_manifest_invalid")).toBe(true);
+  });
+
+  it("reports error for malformed state JSON", async () => {
+    const v = statusVault();
+    mkdirSync(v.paths.qmdCurrent, { recursive: true });
+    writeArtifact(join(v.paths.qmdCurrent, "index-state.json"), "{nope");
+    const status = await readQmdIndexStatus(v.paths);
+    expect(status.state).toBe("error");
+    expect(status.issues.some((i) => i.code === "qmd_index_error")).toBe(true);
+  });
+
+  it("reports error for a state file missing required fields", async () => {
+    const v = statusVault();
+    mkdirSync(v.paths.qmdCurrent, { recursive: true });
+    writeArtifact(join(v.paths.qmdCurrent, "index-state.json"), { version: 1, vaultId: "x" });
+    const status = await readQmdIndexStatus(v.paths);
+    expect(status.state).toBe("error");
+    expect(status.issues.some((i) => i.code === "qmd_index_error")).toBe(true);
+  });
+
+  it("reports stale when state exists but manifest is missing", async () => {
+    const v = statusVault();
+    mkdirSync(v.paths.qmdCurrent, { recursive: true });
+    writeArtifact(join(v.paths.qmdCurrent, "index-state.json"), validStateFile(v));
+    writeArtifact(join(v.paths.qmdCurrent, "index.sqlite"), "");
+    const status = await readQmdIndexStatus(v.paths);
+    expect(status.state).toBe("stale");
+    expect(status.issues.some((i) => i.code === "qmd_index_stale")).toBe(true);
+  });
+
+  it("reports error when state exists but config is missing", async () => {
+    const v = statusVault();
+    rmSync(join(v.paths.dotWiki, "config.json"));
+    mkdirSync(v.paths.qmdCurrent, { recursive: true });
+    writeArtifact(join(v.paths.qmdCurrent, "index-state.json"), validStateFile(v));
+    writeArtifact(join(v.paths.qmdCurrent, "index.sqlite"), "");
+    const status = await readQmdIndexStatus(v.paths);
+    expect(status.state).toBe("error");
+  });
+
+  it("reports error when state exists but current/index.sqlite is absent", async () => {
+    const v = statusVault();
+    mkdirSync(v.paths.qmdCurrent, { recursive: true });
+    writeArtifact(join(v.paths.qmdCurrent, "index-state.json"), validStateFile(v));
+    writeArtifact(v.paths.qmdManifest, validManifest(v));
+    const status = await readQmdIndexStatus(v.paths);
+    expect(status.state).toBe("error");
+    expect(status.issues.some((i) => i.code === "qmd_index_error")).toBe(true);
+  });
+
+  it("reports error when last-error exists with no usable current", async () => {
+    const v = statusVault();
+    writeArtifact(join(v.paths.qmd, "last-error.json"), {
+      code: "qmd_index_error",
+      message: "boom",
+    });
+    const status = await readQmdIndexStatus(v.paths);
+    expect(status.state).toBe("error");
+    expect(status.issues.some((i) => i.code === "qmd_index_error")).toBe(true);
+  });
+
+  it("reports stale with last error preserved when current is usable", async () => {
+    const v = statusVault();
+    mkdirSync(v.paths.qmdCurrent, { recursive: true });
+    writeArtifact(join(v.paths.qmdCurrent, "index-state.json"), validStateFile(v));
+    writeArtifact(join(v.paths.qmdCurrent, "index.sqlite"), "");
+    writeArtifact(v.paths.qmdManifest, validManifest(v));
+    writeArtifact(join(v.paths.qmd, "last-error.json"), {
+      code: "qmd_index_error",
+      message: "boom",
+    });
+    const status = await readQmdIndexStatus(v.paths);
+    expect(status.state).toBe("stale");
+    expect(status.totalDocuments).toBe(2);
+    expect(status.issues.some((i) => i.code === "qmd_index_error")).toBe(true);
+  });
+
+  it("reports recovering with the phase for a valid swap journal", async () => {
+    const v = statusVault();
+    writeArtifact(v.paths.qmdSwap, {
+      version: 1,
+      operationId: "op",
+      stagingName: `staging-${randomUUID()}`,
+      phase: "previous-moved",
+      startedAt: "2026-08-09T00:00:00.000Z",
+    });
+    const status = await readQmdIndexStatus(v.paths);
+    expect(status.state).toBe("recovering");
+    expect(status.swapPhase).toBe("previous-moved");
+    expect(status.repairComponents).toEqual([]);
+  });
+
+  it("reports error for a malformed swap journal", async () => {
+    const v = statusVault();
+    writeArtifact(v.paths.qmdSwap, { version: 99, phase: "bogus" });
+    const status = await readQmdIndexStatus(v.paths);
+    expect(status.state).toBe("error");
+    expect(status.issues.some((i) => i.code === "qmd_swap_interrupted")).toBe(true);
+  });
+
+  it("reports stale with lexical repair on manifest mismatch without vectors", async () => {
+    const v = statusVault();
+    mkdirSync(v.paths.qmdCurrent, { recursive: true });
+    writeArtifact(join(v.paths.qmdCurrent, "index-state.json"), validStateFile(v));
+    writeArtifact(join(v.paths.qmdCurrent, "index.sqlite"), "");
+    writeArtifact(v.paths.qmdManifest, validManifest(v)); // hash differs from state manifestHash
+    const status = await readQmdIndexStatus(v.paths);
+    expect(status.state).toBe("stale");
+    expect(status.repairComponents).toEqual(["lexical"]);
+  });
+
+  it("reports stale with vectors repair on embedding model mismatch", async () => {
+    const v = statusVault();
+    mkdirSync(v.paths.qmdCurrent, { recursive: true });
+    const state = validStateFile(v);
+    state.models = { embed: "text-embedding-3-small", generate: "", rerank: "" };
+    writeArtifact(join(v.paths.qmdCurrent, "index-state.json"), state);
+    writeArtifact(join(v.paths.qmdCurrent, "index.sqlite"), "");
+    writeArtifact(v.paths.qmdManifest, validManifest(v));
+    const status = await readQmdIndexStatus(v.paths);
+    expect(status.state).toBe("stale");
+    expect(status.repairComponents).toEqual(["vectors"]);
+  });
+
+  it("reports stale with vectors repair on manifest mismatch with an existing vector index", async () => {
+    const v = statusVault();
+    mkdirSync(v.paths.qmdCurrent, { recursive: true });
+    const state = validStateFile(v);
+    state.status = { ...state.status, hasVectorIndex: true };
+    writeArtifact(join(v.paths.qmdCurrent, "index-state.json"), state);
+    writeArtifact(join(v.paths.qmdCurrent, "index.sqlite"), "");
+    writeArtifact(v.paths.qmdManifest, validManifest(v));
+    const status = await readQmdIndexStatus(v.paths);
+    expect(status.state).toBe("stale");
+    expect(status.repairComponents).toEqual(["vectors"]);
+  });
+
+  it("reports ready for a fully consistent current store", async () => {
+    const v = statusVault();
+    mkdirSync(v.paths.qmdCurrent, { recursive: true });
+    const manifest = validManifest(v);
+    const manifestHash = hashOf(manifest);
+    writeArtifact(
+      join(v.paths.qmdCurrent, "index-state.json"),
+      validStateFile(v, { manifestHash }),
+    );
+    writeArtifact(join(v.paths.qmdCurrent, "index.sqlite"), "");
+    writeArtifact(v.paths.qmdManifest, manifest);
+    const status = await readQmdIndexStatus(v.paths);
+    expect(status.state).toBe("ready");
+    expect(status.repairComponents).toEqual([]);
+  });
+});
+
+function hashOf(manifest: unknown): string {
+  // Replicate the manifest hash used by qmd-mirror (sorted entries JSON sha256).
+  const m = manifest as { version: number; vaultId: string; entries: Record<string, unknown> };
+  const entries = Object.fromEntries(
+    Object.entries(m.entries).sort(([a], [b]) => (a < b ? -1 : 1)),
+  );
+  return createHash("sha256")
+    .update(JSON.stringify({ version: m.version, vaultId: m.vaultId, entries }))
+    .digest("hex");
+}

@@ -138,6 +138,7 @@ export async function readQmdManifest(
   }
 
   const entries: Record<string, QmdManifestEntry> = {};
+  const wikiRoot = resolve(paths.wiki) + sep;
   for (const [key, value] of Object.entries(rawEntries as Record<string, unknown>)) {
     // Reject absolute keys and traversal keys before trusting any entry.
     if (isAbsolute(key) || key.includes("\\") || key.split("/").includes("..")) {
@@ -146,11 +147,44 @@ export async function readQmdManifest(
     const entry = value as Partial<QmdManifestEntry>;
     if (
       typeof entry !== "object" ||
+      entry === null ||
       typeof entry.sourcePath !== "string" ||
       typeof entry.pageId !== "string" ||
+      typeof entry.contentHash !== "string" ||
+      typeof entry.type !== "string" ||
       (entry.role !== "canonical" && entry.role !== "evidence")
     ) {
       throw new Error("qmd_manifest_invalid: malformed manifest entry");
+    }
+    // The key is deterministic: documents/<role>/<pageId>.md. The entry must
+    // match both the role and page id encoded in its key.
+    if (!key.startsWith("documents/")) {
+      throw new Error("qmd_manifest_invalid: manifest key outside documents");
+    }
+    const rest = key.slice("documents/".length);
+    const slash = rest.indexOf("/");
+    if (slash <= 0 || !rest.endsWith(".md")) {
+      throw new Error("qmd_manifest_invalid: manifest key lacks role/page id");
+    }
+    const keyRole = rest.slice(0, slash);
+    const keyPageId = rest.slice(slash + 1, -3);
+    if (keyRole !== entry.role || keyPageId !== entry.pageId || keyPageId === "") {
+      throw new Error("qmd_manifest_invalid: manifest key/entry mismatch");
+    }
+    if (entry.vaultId !== vaultId) {
+      throw new Error("qmd_manifest_invalid: entry vaultId mismatch");
+    }
+    if (entry.type.trim() === "") {
+      throw new Error("qmd_manifest_invalid: entry type is empty");
+    }
+    if (!/^[0-9a-f]{64}$/.test(entry.contentHash)) {
+      throw new Error("qmd_manifest_invalid: entry contentHash is not a sha256 hex");
+    }
+    // Source paths are authoritative page files under paths.wiki, therefore
+    // under paths.root and outside paths.qmd.
+    const source = resolve(entry.sourcePath);
+    if (!isAbsolute(entry.sourcePath) || !source.startsWith(wikiRoot)) {
+      throw new Error("qmd_manifest_invalid: entry sourcePath outside wiki");
     }
     entries[key] = entry as QmdManifestEntry;
   }
@@ -351,14 +385,64 @@ export async function invalidateUnsafeQmdEntries(
   diagnostics.push(...discovery.diagnostics);
 
   let prior: QmdManifest;
+  let priorUnsafe = false;
   try {
     prior = await readQmdManifest(paths, vaultId);
   } catch {
+    // Fail closed in the removal direction: a corrupt prior manifest cannot be
+    // trusted, so treat every previously generated mirror entry as unsafe and
+    // remove only files we can enumerate safely from disk.
+    prior = { version: QMD_MANIFEST_VERSION, vaultId, entries: {} };
+    priorUnsafe = true;
+  }
+
+  if (priorUnsafe) {
+    // Remove every generated mirror file under documents/ that can be
+    // enumerated safely, so stale deleted-page candidates cannot survive.
+    const documentsRoot = join(paths.qmd, "documents");
+    const removedFiles: string[] = [];
+    async function collect(dir: string): Promise<void> {
+      let entries: Dirent[];
+      try {
+        entries = await readdir(dir, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const entry of entries) {
+        const full = join(dir, entry.name);
+        if (entry.isDirectory()) {
+          await collect(full);
+        } else if (entry.isFile() && entry.name.endsWith(".md")) {
+          removedFiles.push(full);
+        }
+      }
+    }
+    await collect(documentsRoot);
+    for (const file of removedFiles) {
+      try {
+        await rm(file, { force: true });
+      } catch {
+        // Already absent.
+      }
+    }
+    await atomicWrite(
+      paths.qmdManifest,
+      JSON.stringify({ version: QMD_MANIFEST_VERSION, vaultId, entries: {} }, null, 2),
+    );
     return {
       manifest: { version: QMD_MANIFEST_VERSION, vaultId, entries: {} },
-      manifestHash: "",
-      counts: { indexed: 0, updated: 0, unchanged: 0, removed: 0 },
-      diagnostics,
+      manifestHash: hashQmdManifest({ version: QMD_MANIFEST_VERSION, vaultId, entries: {} }),
+      counts: { indexed: 0, updated: 0, unchanged: 0, removed: removedFiles.length },
+      diagnostics: [
+        ...diagnostics,
+        {
+          severity: "warning",
+          code: "qmd_manifest_invalid",
+          path: paths.qmdManifest,
+          message:
+            "Corrupt QMD manifest during invalidation; removed generated mirror entries fail-closed",
+        } as KnowledgeDiagnostic,
+      ],
     };
   }
 

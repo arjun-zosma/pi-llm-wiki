@@ -240,6 +240,7 @@ function blockedReindexResult(
       evidenceDocuments: 0,
       needsEmbedding: 0,
       hasVectorIndex: false,
+      repairComponents: [],
       issues: [{ code, message }],
     },
     warnings: [],

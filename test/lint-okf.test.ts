@@ -441,7 +441,7 @@ describe("QMD status and lint diagnostics", () => {
       sourcePath: join(paths.wiki, "concepts", "fake.md"),
       vaultId: manifest.vaultId,
       pageId: "concepts/fake",
-      contentHash: "x",
+      contentHash: "b".repeat(64),
       role: "canonical",
       type: "concept",
     };

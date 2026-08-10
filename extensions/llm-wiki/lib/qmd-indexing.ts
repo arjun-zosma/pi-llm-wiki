@@ -65,6 +65,8 @@ export interface QmdGeneratedStatus {
   indexedManifestHash?: string;
   lastIndexedAt?: string;
   swapPhase?: QmdSwapPhase;
+  /** Valid tool component values that a reindex can use to repair this state. */
+  repairComponents: QmdComponent[];
   issues: QmdIndexIssue[];
 }
 
@@ -904,104 +906,324 @@ export async function invalidateQmdAfterProjectionFailure(
 /**
  * Read generated QMD index status without opening any QMD store or loading a
  * model. Reads only manifest, current state, last-error, lock, and swap journal.
+ *
+ * Precedence: valid journal -> recovering; malformed artifacts -> error;
+ * no state/error -> missing; state without DB -> error; error artifact without
+ * a usable current -> error; usable current with any mismatch -> stale;
+ * otherwise -> ready. An absent config beside an existing state is an error
+ * because the indexed vault identity cannot be confirmed.
  */
 export async function readQmdIndexStatus(paths: VaultPaths): Promise<QmdGeneratedStatus> {
   const models = resolveQmdModels();
   const issues: QmdIndexIssue[] = [];
-  const vaultId = await readConfigVaultId(paths);
-  const manifest = await readQmdManifestSafe(paths, vaultId);
-  const manifestHash = manifest ? hashQmdManifest(manifest) : undefined;
-  const stateFile = await readJsonFile<QmdIndexStateFile>(
-    join(paths.qmdCurrent, "index-state.json"),
-  );
-  const lastError = await readJsonFile<{ code?: string; message?: string; manifestHash?: string }>(
-    join(paths.qmd, "last-error.json"),
-  );
-  const journal = await readSwapJournal(paths);
+  const repair = new Set<QmdComponent>();
 
-  let state: QmdIndexState;
-  let swapPhase: QmdSwapPhase | undefined;
+  const config = await readJsonArtifact<{ vault_id?: unknown }>(join(paths.dotWiki, "config.json"));
+  const vaultId =
+    config.kind === "valid" &&
+    typeof config.value.vault_id === "string" &&
+    UUID.test(config.value.vault_id)
+      ? config.value.vault_id
+      : undefined;
+
+  // Manifest is missing only when the file is absent; malformed JSON, unsafe
+  // entries, or a vault mismatch are all `error` (never trusted prior state).
+  let manifestHash: string | undefined;
+  if (config.kind === "valid" && vaultId) {
+    const manifestRead = await readJsonArtifact<unknown>(paths.qmdManifest);
+    if (manifestRead.kind === "invalid") {
+      issues.push({
+        code: "qmd_manifest_invalid",
+        message: manifestRead.message,
+      });
+    } else if (manifestRead.kind === "valid") {
+      try {
+        const manifest = await readQmdManifest(paths, vaultId);
+        manifestHash = hashQmdManifest(manifest);
+      } catch (error) {
+        issues.push({
+          code: "qmd_manifest_invalid",
+          message: (error as Error).message,
+        });
+      }
+    }
+  } else if (config.kind === "invalid") {
+    issues.push({ code: "qmd_config_invalid", message: config.message });
+  }
+
+  const stateRead = await readJsonArtifact<unknown>(join(paths.qmdCurrent, "index-state.json"));
+  const stateFile =
+    stateRead.kind === "valid" && isQmdIndexStateFile(stateRead.value)
+      ? stateRead.value
+      : undefined;
+  if (stateRead.kind === "invalid") {
+    issues.push({ code: "qmd_index_error", message: stateRead.message });
+  } else if (stateRead.kind === "valid" && !stateFile) {
+    issues.push({ code: "qmd_index_error", message: "QMD index state file is malformed" });
+  }
+
+  const lastError = await readJsonArtifact<{
+    code?: string;
+    message?: string;
+    manifestHash?: string;
+  }>(join(paths.qmd, "last-error.json"));
+  if (lastError.kind === "invalid") {
+    issues.push({ code: "qmd_index_error", message: lastError.message });
+  }
+
+  const journal = await readSwapJournal(paths);
   if (journal) {
-    state = "recovering";
-    swapPhase = journal.phase;
+    return {
+      state: "recovering",
+      vaultId: stateFile?.vaultId ?? vaultId,
+      qmdVersion: QMD_PACKAGE_VERSION,
+      models,
+      totalDocuments: stateFile?.status?.totalDocuments ?? 0,
+      canonicalDocuments: stateFile?.status?.canonicalDocuments ?? 0,
+      evidenceDocuments: stateFile?.status?.evidenceDocuments ?? 0,
+      needsEmbedding: stateFile?.status?.needsEmbedding ?? 0,
+      hasVectorIndex: stateFile?.status?.hasVectorIndex ?? false,
+      manifestHash,
+      indexedManifestHash: stateFile?.manifestHash,
+      lastIndexedAt: stateFile?.indexedAt,
+      swapPhase: journal.phase,
+      repairComponents: [],
+      issues: [
+        {
+          code: "qmd_swap_interrupted",
+          message: "A QMD index swap was interrupted and is being recovered",
+        },
+      ],
+    };
+  }
+  if (await pathExists(paths.qmdSwap)) {
     issues.push({
       code: "qmd_swap_interrupted",
-      message: "A QMD index swap was interrupted and is being recovered",
+      message: "QMD swap journal is malformed; leaving state untouched for inspection",
     });
-  } else if (!stateFile) {
-    state = "missing";
-  } else if (stateFile.version !== 1 || typeof stateFile.vaultId !== "string") {
-    state = "error";
-    issues.push({ code: "qmd_index_error", message: "QMD index state file is malformed" });
-  } else {
-    const embedChanged = stateFile.models?.embed !== models.embed;
-    const manifestChanged = manifestHash !== undefined && stateFile.manifestHash !== manifestHash;
-    const versionChanged = stateFile.qmdVersion !== QMD_PACKAGE_VERSION;
-    const vaultChanged = vaultId !== undefined && stateFile.vaultId !== vaultId;
-    if (manifestChanged || versionChanged || vaultChanged || embedChanged || lastError) {
-      state = "stale";
-      if (lastError) {
-        issues.push({
-          code: "qmd_index_error",
-          message: lastError.message ?? "Last QMD index attempt failed",
-        });
-      } else if (manifestChanged) {
-        issues.push({
-          code: "qmd_index_stale",
-          message: "QMD index is stale relative to the document manifest",
-        });
-      } else if (embedChanged) {
-        issues.push({
-          code: "qmd_index_stale",
-          message: "QMD embedding model changed; vectors are stale",
-        });
-      } else if (versionChanged) {
-        issues.push({
-          code: "qmd_index_stale",
-          message: "QMD package version changed; index needs rebuild",
-        });
-      } else if (vaultChanged) {
-        issues.push({ code: "qmd_index_stale", message: "QMD index vault identity changed" });
-      }
-    } else {
-      state = "ready";
+  }
+
+  const dbExists = await pathExists(join(paths.qmdCurrent, "index.sqlite"));
+  const hasPriorVectors = stateFile?.status?.hasVectorIndex ?? false;
+
+  // Fail closed: any malformed artifact, an interrupted swap, a state without
+  // its DB, or an error artifact without a usable current is an error.
+  const malformedArtifact =
+    issues.some((i) => i.code === "qmd_manifest_invalid" || i.code === "qmd_config_invalid") ||
+    stateRead.kind === "invalid" ||
+    (stateRead.kind === "valid" && !stateFile) ||
+    lastError.kind === "invalid";
+  const interruptedSwap = issues.some((i) => i.code === "qmd_swap_interrupted");
+  const stateWithoutDb = stateFile !== undefined && !dbExists;
+  const errorWithoutCurrent = lastError.kind === "valid" && stateFile === undefined;
+  if (malformedArtifact || interruptedSwap || stateWithoutDb || errorWithoutCurrent) {
+    if (stateWithoutDb) {
+      issues.push({
+        code: "qmd_index_error",
+        message: "QMD index state exists but current/index.sqlite is absent",
+      });
     }
+    if (errorWithoutCurrent) {
+      issues.push({
+        code: "qmd_index_error",
+        message: "Last QMD index attempt failed and no usable current index exists",
+      });
+    }
+    repair.add(hasPriorVectors ? "vectors" : "lexical");
+    return errorStatus({
+      stateFile,
+      vaultId,
+      manifestHash,
+      models,
+      issues,
+      repair,
+    });
+  }
+
+  if (!stateFile) {
+    // No state and no error artifact -> a fresh vault (legacy config without a
+    // vault_id remains backfillable, not invalid).
+    return {
+      state: "missing",
+      vaultId,
+      qmdVersion: QMD_PACKAGE_VERSION,
+      models,
+      totalDocuments: 0,
+      canonicalDocuments: 0,
+      evidenceDocuments: 0,
+      needsEmbedding: 0,
+      hasVectorIndex: false,
+      manifestHash,
+      repairComponents: [],
+      issues,
+    };
+  }
+
+  // A usable state exists; absent config cannot confirm the vault identity.
+  if (config.kind !== "valid" || !vaultId) {
+    issues.push({
+      code: "qmd_config_invalid",
+      message: "QMD config is missing or malformed; vault identity cannot be confirmed",
+    });
+    repair.add(stateFile.status.hasVectorIndex ? "vectors" : "lexical");
+    return errorStatus({
+      stateFile,
+      vaultId,
+      manifestHash,
+      models,
+      issues,
+      repair,
+    });
+  }
+
+  const embedChanged = stateFile.models.embed !== models.embed;
+  const manifestChanged = stateFile.manifestHash !== manifestHash;
+  const versionChanged = stateFile.qmdVersion !== QMD_PACKAGE_VERSION;
+  const vaultChanged = vaultId !== undefined && stateFile.vaultId !== vaultId;
+  const hasVectors = stateFile.status.hasVectorIndex;
+
+  if (lastError.kind === "valid") {
+    issues.push({
+      code: "qmd_index_error",
+      message: lastError.value.message ?? "Last QMD index attempt failed",
+    });
+  }
+  if (manifestChanged) {
+    issues.push({
+      code: "qmd_index_stale",
+      message: "QMD index is stale relative to the document manifest",
+    });
+  }
+  if (embedChanged) {
+    issues.push({
+      code: "qmd_index_stale",
+      message: "QMD embedding model changed; vectors are stale",
+    });
+  }
+  if (versionChanged) {
+    issues.push({
+      code: "qmd_index_stale",
+      message: "QMD package version changed; index needs rebuild",
+    });
+  }
+  if (vaultChanged) {
+    issues.push({ code: "qmd_index_stale", message: "QMD index vault identity changed" });
+  }
+
+  if (issues.length > 0) {
+    // Derive the minimal repair set: an embedding model change or any mismatch
+    // with an existing vector index requires a vectors pass, which refreshes
+    // the document index first (so it also repairs lexical staleness). Only
+    // when no vectors are involved does a lexical pass suffice.
+    const needsVectors =
+      embedChanged ||
+      (hasVectors &&
+        (manifestChanged || versionChanged || vaultChanged || lastError.kind === "valid"));
+    const needsLexical =
+      !needsVectors &&
+      (manifestChanged || versionChanged || vaultChanged || lastError.kind === "valid");
+    if (needsVectors) repair.add("vectors");
+    if (needsLexical) repair.add("lexical");
+    return {
+      state: "stale",
+      vaultId: stateFile.vaultId,
+      qmdVersion: QMD_PACKAGE_VERSION,
+      models,
+      totalDocuments: stateFile.status.totalDocuments,
+      canonicalDocuments: stateFile.status.canonicalDocuments,
+      evidenceDocuments: stateFile.status.evidenceDocuments,
+      needsEmbedding: stateFile.status.needsEmbedding,
+      hasVectorIndex: hasVectors,
+      manifestHash,
+      indexedManifestHash: stateFile.manifestHash,
+      lastIndexedAt: stateFile.indexedAt,
+      repairComponents: [...repair].sort(),
+      issues,
+    };
   }
 
   return {
-    state,
-    vaultId: stateFile?.vaultId ?? vaultId,
+    state: "ready",
+    vaultId: stateFile.vaultId,
     qmdVersion: QMD_PACKAGE_VERSION,
     models,
-    totalDocuments: stateFile?.status?.totalDocuments ?? 0,
-    canonicalDocuments: stateFile?.status?.canonicalDocuments ?? 0,
-    evidenceDocuments: stateFile?.status?.evidenceDocuments ?? 0,
-    needsEmbedding: stateFile?.status?.needsEmbedding ?? 0,
-    hasVectorIndex: stateFile?.status?.hasVectorIndex ?? false,
+    totalDocuments: stateFile.status.totalDocuments,
+    canonicalDocuments: stateFile.status.canonicalDocuments,
+    evidenceDocuments: stateFile.status.evidenceDocuments,
+    needsEmbedding: stateFile.status.needsEmbedding,
+    hasVectorIndex: hasVectors,
     manifestHash,
-    indexedManifestHash: stateFile?.manifestHash,
-    lastIndexedAt: stateFile?.indexedAt,
-    swapPhase,
+    indexedManifestHash: stateFile.manifestHash,
+    lastIndexedAt: stateFile.indexedAt,
+    repairComponents: [],
     issues,
   };
 }
 
-async function readConfigVaultId(paths: VaultPaths): Promise<string | undefined> {
-  const config = await readJsonFile<{ vault_id?: unknown }>(join(paths.dotWiki, "config.json"));
-  if (config && typeof config.vault_id === "string" && UUID.test(config.vault_id)) {
-    return config.vault_id;
-  }
-  return undefined;
+function errorStatus(opts: {
+  stateFile?: QmdIndexStateFile;
+  vaultId?: string;
+  manifestHash?: string;
+  models: QmdResolvedModels;
+  issues: QmdIndexIssue[];
+  repair: Set<QmdComponent>;
+}): QmdGeneratedStatus {
+  return {
+    state: "error",
+    vaultId: opts.stateFile?.vaultId ?? opts.vaultId,
+    qmdVersion: QMD_PACKAGE_VERSION,
+    models: opts.models,
+    totalDocuments: opts.stateFile?.status?.totalDocuments ?? 0,
+    canonicalDocuments: opts.stateFile?.status?.canonicalDocuments ?? 0,
+    evidenceDocuments: opts.stateFile?.status?.evidenceDocuments ?? 0,
+    needsEmbedding: opts.stateFile?.status?.needsEmbedding ?? 0,
+    hasVectorIndex: opts.stateFile?.status?.hasVectorIndex ?? false,
+    manifestHash: opts.manifestHash,
+    indexedManifestHash: opts.stateFile?.manifestHash,
+    lastIndexedAt: opts.stateFile?.indexedAt,
+    repairComponents: [...opts.repair].sort(),
+    issues: opts.issues,
+  };
 }
 
-async function readQmdManifestSafe(
-  paths: VaultPaths,
-  vaultId?: string,
-): Promise<ReturnType<typeof readQmdManifest> extends Promise<infer T> ? T : never> {
-  if (!vaultId) return null as never;
+function isQmdIndexStateFile(value: unknown): value is QmdIndexStateFile {
+  if (typeof value !== "object" || value === null) return false;
+  const state = value as Record<string, unknown>;
+  if (state.version !== 1 || typeof state.vaultId !== "string") return false;
+  if (typeof state.qmdVersion !== "string") return false;
+  const models = state.models as Record<string, unknown> | undefined;
+  if (!models || typeof models !== "object") return false;
+  for (const key of ["embed", "generate", "rerank"] as const) {
+    if (typeof models[key] !== "string") return false;
+  }
+  if (typeof state.manifestHash !== "string") return false;
+  if (typeof state.indexedAt !== "string") return false;
+  const status = state.status as Record<string, unknown> | undefined;
+  if (!status || typeof status !== "object") return false;
+  if (typeof status.totalDocuments !== "number") return false;
+  if (typeof status.canonicalDocuments !== "number") return false;
+  if (typeof status.evidenceDocuments !== "number") return false;
+  if (typeof status.needsEmbedding !== "number") return false;
+  if (typeof status.hasVectorIndex !== "boolean") return false;
+  return true;
+}
+
+type JsonArtifact<T> =
+  | { kind: "missing" }
+  | { kind: "valid"; value: T }
+  | { kind: "invalid"; message: string };
+
+async function readJsonArtifact<T>(path: string): Promise<JsonArtifact<T>> {
+  let raw: string;
   try {
-    return await readQmdManifest(paths, vaultId);
-  } catch {
-    return null as never;
+    raw = await readFile(path, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { kind: "missing" };
+    return { kind: "invalid", message: (error as Error).message };
+  }
+  try {
+    return { kind: "valid", value: JSON.parse(raw) as T };
+  } catch (error) {
+    return { kind: "invalid", message: (error as Error).message };
   }
 }

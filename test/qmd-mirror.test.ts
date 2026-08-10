@@ -257,3 +257,154 @@ Body for ${title}.
 function statMs(path: string): number {
   return statSync(path).mtimeMs;
 }
+
+describe("QMD manifest strict validation", () => {
+  function manifestVault(): { paths: ReturnType<typeof getVaultPaths>; vaultId: string } {
+    const paths = tempVault();
+    mkdirSync(join(paths.wiki, "concepts"), { recursive: true });
+    writeFileSync(join(paths.wiki, "concepts", "a.md"), makePage("concept", "A"));
+    mkdirSync(paths.qmd, { recursive: true });
+    const vaultId = randomUUID();
+    return { paths, vaultId };
+  }
+
+  function entry(
+    paths: ReturnType<typeof getVaultPaths>,
+    vaultId: string,
+    overrides: Record<string, unknown> = {},
+  ): Record<string, unknown> {
+    return {
+      sourcePath: join(paths.wiki, "concepts/a.md"),
+      vaultId,
+      pageId: "concepts/a",
+      contentHash: "a".repeat(64),
+      role: "canonical",
+      type: "concept",
+      ...overrides,
+    };
+  }
+
+  it("returns an empty manifest for a missing file", async () => {
+    const { paths, vaultId } = manifestVault();
+    const manifest = await readQmdManifest(paths, vaultId);
+    expect(manifest.entries).toEqual({});
+  });
+
+  it("throws for malformed JSON", async () => {
+    const { paths, vaultId } = manifestVault();
+    writeFileSync(paths.qmdManifest, "{not-json");
+    await expect(readQmdManifest(paths, vaultId)).rejects.toThrow(/manifest/i);
+  });
+
+  it("throws for an absolute or traversal manifest key", async () => {
+    const { paths, vaultId } = manifestVault();
+    writeFileSync(
+      paths.qmdManifest,
+      JSON.stringify({
+        version: 1,
+        vaultId,
+        entries: { "/etc/passwd": entry(paths, vaultId) },
+      }),
+    );
+    await expect(readQmdManifest(paths, vaultId)).rejects.toThrow(/manifest/i);
+  });
+
+  it("throws when the entry role/pageId do not match the key", async () => {
+    const { paths, vaultId } = manifestVault();
+    writeFileSync(
+      paths.qmdManifest,
+      JSON.stringify({
+        version: 1,
+        vaultId,
+        entries: {
+          "documents/canonical/concepts/a.md": entry(paths, vaultId, { role: "evidence" }),
+        },
+      }),
+    );
+    await expect(readQmdManifest(paths, vaultId)).rejects.toThrow(/manifest/i);
+  });
+
+  it("throws when the entry vaultId does not match the manifest", async () => {
+    const { paths, vaultId } = manifestVault();
+    writeFileSync(
+      paths.qmdManifest,
+      JSON.stringify({
+        version: 1,
+        vaultId,
+        entries: {
+          "documents/canonical/concepts/a.md": entry(paths, vaultId, { vaultId: randomUUID() }),
+        },
+      }),
+    );
+    await expect(readQmdManifest(paths, vaultId)).rejects.toThrow(/manifest/i);
+  });
+
+  it("throws when the sourcePath is outside the wiki", async () => {
+    const { paths, vaultId } = manifestVault();
+    writeFileSync(
+      paths.qmdManifest,
+      JSON.stringify({
+        version: 1,
+        vaultId,
+        entries: {
+          "documents/canonical/concepts/a.md": entry(paths, vaultId, {
+            sourcePath: "/tmp/somewhere-else.md",
+          }),
+        },
+      }),
+    );
+    await expect(readQmdManifest(paths, vaultId)).rejects.toThrow(/manifest/i);
+  });
+
+  it("throws when type is empty or contentHash is not a sha256 hex", async () => {
+    const { paths, vaultId } = manifestVault();
+    writeFileSync(
+      paths.qmdManifest,
+      JSON.stringify({
+        version: 1,
+        vaultId,
+        entries: {
+          "documents/canonical/concepts/a.md": entry(paths, vaultId, { type: "  " }),
+        },
+      }),
+    );
+    await expect(readQmdManifest(paths, vaultId)).rejects.toThrow(/manifest/i);
+    writeFileSync(
+      paths.qmdManifest,
+      JSON.stringify({
+        version: 1,
+        vaultId,
+        entries: {
+          "documents/canonical/concepts/a.md": entry(paths, vaultId, { contentHash: "xyz" }),
+        },
+      }),
+    );
+    await expect(readQmdManifest(paths, vaultId)).rejects.toThrow(/manifest/i);
+  });
+
+  it("accepts a fully valid manifest", async () => {
+    const { paths, vaultId } = manifestVault();
+    writeFileSync(
+      paths.qmdManifest,
+      JSON.stringify({
+        version: 1,
+        vaultId,
+        entries: { "documents/canonical/concepts/a.md": entry(paths, vaultId) },
+      }),
+    );
+    const manifest = await readQmdManifest(paths, vaultId);
+    expect(manifest.entries["documents/canonical/concepts/a.md"].contentHash).toBe("a".repeat(64));
+  });
+
+  it("invalidates fail-closed on a corrupt prior manifest", async () => {
+    const { paths, vaultId } = manifestVault();
+    await reconcileQmdMirror(paths, vaultId, "all");
+    // Corrupt the manifest, then remove the page so a stale candidate exists.
+    writeFileSync(paths.qmdManifest, "{broken");
+    rmSync(join(paths.wiki, "concepts", "a.md"));
+    const result = await invalidateUnsafeQmdEntries(paths, vaultId);
+    expect(result.counts.removed).toBeGreaterThan(0);
+    const manifest = await readQmdManifest(paths, vaultId);
+    expect(Object.keys(manifest.entries)).toHaveLength(0);
+  });
+});
