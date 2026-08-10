@@ -430,7 +430,6 @@ async function recoverQmdIndexLocked(
   const previous = join(paths.qmd, "previous");
   const currentExists = await fs.exists(join(current, "index.sqlite"));
   const previousExists = await fs.exists(previous);
-  const stagingExists = await fs.exists(staging);
 
   const currentValid = () => validateCurrent(paths, factory, fs);
 
@@ -1153,7 +1152,7 @@ export async function readQmdIndexStatus(paths: VaultPaths): Promise<QmdGenerate
   const embedChanged = stateFile.models.embed !== models.embed;
   const manifestChanged = stateFile.manifestHash !== manifestHash;
   const versionChanged = stateFile.qmdVersion !== QMD_PACKAGE_VERSION;
-  const vaultChanged = vaultId !== undefined && stateFile.vaultId !== vaultId;
+  const vaultChanged = stateFile.vaultId !== vaultId;
   const hasVectors = stateFile.status.hasVectorIndex;
 
   if (lastError.kind === "valid") {
