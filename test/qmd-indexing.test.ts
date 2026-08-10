@@ -346,4 +346,38 @@ describe("QMD vault reindexing", () => {
     // A busy lock we do not own must not be removed.
     expect(existsSync(lockDir)).toBe(true);
   });
+
+  it("publishes the write-ahead phase before each destructive rename", async () => {
+    const paths = tempVault();
+    writePage(paths, "concepts/a.md", "A");
+    const first = await reindexQmdVault(paths, { scope: "changed", components: ["lexical"] });
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+
+    // Wrap the fs adapter: before delegating each rename, read swap.json and
+    // record the persisted phase. Write-ahead intent must precede the rename.
+    const observed: string[] = [];
+    const realRename = (await import("node:fs/promises")).rename;
+    const { factory } = fakeFactory({ totalDocuments: 1 });
+    const fsSeam = {
+      exists: async (p: string) => existsSync(p),
+      rename: async (from: string, to: string) => {
+        const journal = JSON.parse(readFileSync(paths.qmdSwap, "utf8"));
+        observed.push(`${journal.phase}:${from.endsWith("current") ? "current" : "staging"}`);
+        await realRename(from, to);
+      },
+      rm: async (p: string, o: { recursive: boolean; force: boolean }) =>
+        (await import("node:fs/promises")).rm(p, o as never),
+      cp: async (from: string, to: string, o: { recursive: boolean; errorOnExist: boolean }) =>
+        (await import("node:fs/promises")).cp(from, to, o as never),
+    };
+
+    const second = await reindexQmdVault(
+      paths,
+      { scope: "changed", components: ["lexical"], force: true },
+      { factory, fs: fsSeam },
+    );
+    expect(second.ok).toBe(true);
+    expect(observed).toEqual(["previous-moved:current", "current-promoted:staging"]);
+  });
 });

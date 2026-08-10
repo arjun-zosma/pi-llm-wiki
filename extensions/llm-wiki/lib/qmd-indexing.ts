@@ -299,13 +299,46 @@ async function readSwapJournal(paths: VaultPaths): Promise<QmdSwapJournal | null
   return journal;
 }
 
+/**
+ * The document count a current store must report to be valid: the validated
+ * manifest entry count when the manifest is readable, otherwise the recorded
+ * count in the structurally valid current state file. Returns undefined when
+ * neither is available (openability alone is then the only check).
+ */
+async function expectedDocumentCount(
+  paths: VaultPaths,
+  fs: NonNullable<QmdIndexDeps["fs"]>,
+): Promise<number | undefined> {
+  if (await fs.exists(paths.qmdManifest)) {
+    try {
+      const stateFile = await readJsonFile<QmdIndexStateFile>(
+        join(paths.qmdCurrent, "index-state.json"),
+      );
+      const vaultId = stateFile?.vaultId;
+      if (vaultId) {
+        const manifest = await readQmdManifest(paths, vaultId);
+        return Object.keys(manifest.entries).length;
+      }
+    } catch {
+      // Malformed manifest — fall through to the state file expectation.
+    }
+  }
+  const stateFile = await readJsonFile<QmdIndexStateFile>(
+    join(paths.qmdCurrent, "index-state.json"),
+  );
+  return stateFile?.status?.totalDocuments;
+}
+
 // ---------------------------------------------------------------------------
 // Recovery
 // ---------------------------------------------------------------------------
 
 /**
  * Recover an interrupted prior swap. Assumes the index lock is already held.
- * Only cleans up generated state and never guesses destructive recovery.
+ * Handles both write-ahead journals (phase published before the destructive
+ * rename it covers) and legacy post-operation journals (phase published after
+ * the rename). Only cleans up generated state; malformed journals are left
+ * untouched for inspection.
  */
 async function recoverQmdIndexLocked(
   paths: VaultPaths,
@@ -335,33 +368,78 @@ async function recoverQmdIndexLocked(
   const staging = join(paths.qmd, journal.stagingName);
   const current = paths.qmdCurrent;
   const previous = join(paths.qmd, "previous");
+  const currentExists = await fs.exists(join(current, "index.sqlite"));
+  const previousExists = await fs.exists(previous);
+  const stagingExists = await fs.exists(staging);
+
+  const currentValid = () => validateCurrent(paths, factory, fs);
 
   switch (journal.phase) {
     case "prepared":
+      // Write-ahead: nothing was renamed yet. Legacy post-op journal: current
+      // may already have been moved to previous before the phase was written.
+      if (!currentExists && previousExists) {
+        await fs.rename(previous, current);
+      }
       await fs.rm(staging, { recursive: true, force: true });
       break;
     case "previous-moved":
-      if (!(await fs.exists(current)) && (await fs.exists(previous))) {
+      if (currentExists && previousExists) {
+        // Legacy: both renames happened before the phase was published.
+        if (await currentValid()) {
+          await fs.rm(previous, { recursive: true, force: true });
+        } else {
+          await fs.rm(current, { recursive: true, force: true });
+          await fs.rename(previous, current);
+        }
+      } else if (!currentExists && previousExists) {
+        // Crash after rename(current, previous): restore it.
+        await fs.rename(previous, current);
+      }
+      // Else: crash before rename(current, previous) — keep current.
+      await fs.rm(staging, { recursive: true, force: true });
+      break;
+    case "current-promoted":
+      if (currentExists && previousExists) {
+        // Crash after rename(staging, current) but before validated.
+        if (await currentValid()) {
+          await fs.rm(previous, { recursive: true, force: true });
+        } else {
+          await fs.rm(current, { recursive: true, force: true });
+          await fs.rename(previous, current);
+        }
+      } else if (currentExists) {
+        // No prior current: keep the promoted store only if it validates;
+        // otherwise report missing rather than inventing a store.
+        if (!(await currentValid())) {
+          await fs.rm(current, { recursive: true, force: true });
+        }
+      } else if (previousExists) {
+        // Crash before rename(staging, current): restore the previous current.
         await fs.rename(previous, current);
       }
       await fs.rm(staging, { recursive: true, force: true });
       break;
-    case "current-promoted":
-      if (await validateCurrent(paths, factory, fs)) {
-        await fs.rm(previous, { recursive: true, force: true });
-      } else if (await fs.exists(previous)) {
-        await fs.rm(current, { recursive: true, force: true });
-        await fs.rename(previous, current);
-      } else {
-        await fs.rm(current, { recursive: true, force: true });
-      }
-      break;
     case "validated":
-      await fs.rm(previous, { recursive: true, force: true });
+      if (currentExists && previousExists) {
+        if (await currentValid()) {
+          await fs.rm(previous, { recursive: true, force: true });
+        } else {
+          await fs.rm(current, { recursive: true, force: true });
+          await fs.rename(previous, current);
+        }
+      }
       break;
   }
 
   await fs.rm(paths.qmdSwap, { recursive: true, force: true });
+
+  // A recovered validated current means the last indexing attempt actually
+  // succeeded: clear the stale error artifact. Without a usable current, keep
+  // it so status can still explain the failure.
+  if (await currentValid()) {
+    await fsRm(join(paths.qmd, "last-error.json"), { recursive: true, force: true });
+  }
   return { ok: true, diagnostics };
 }
 
@@ -377,7 +455,8 @@ async function validateCurrent(
       { dbPath: join(paths.qmdCurrent, "index.sqlite"), documentsPath: paths.qmdDocuments },
       async (store) => {
         const status = await store.status();
-        return status.totalDocuments >= 0;
+        const expected = await expectedDocumentCount(paths, fs);
+        return expected === undefined || status.totalDocuments === expected;
       },
     );
   } catch {
@@ -427,6 +506,70 @@ async function withStore<T>(
 
 function checkCancelled(signal?: AbortSignal): void {
   if (signal?.aborted) throw new QmdIndexCancelledError();
+}
+
+/**
+ * Promote a validated staging store to current using a write-ahead journal.
+ * Every destructive rename is preceded by a durable journal phase, so a crash
+ * at any point leaves recovery enough intent to clean up or roll back.
+ *
+ * Ordering: prepared -> previous-moved (before rename current->previous)
+ * -> current-promoted (before rename staging->current) -> validate promoted
+ * current -> validated (only after count validation) -> cleanup.
+ */
+async function promoteStagingToCurrent(
+  paths: VaultPaths,
+  stagingName: string,
+  factory: QmdStoreFactory,
+  fs: NonNullable<QmdIndexDeps["fs"]>,
+): Promise<void> {
+  const staging = join(paths.qmd, stagingName);
+  const current = paths.qmdCurrent;
+  const previous = join(paths.qmd, "previous");
+
+  const journal: QmdSwapJournal = {
+    version: 1,
+    operationId: randomUUID(),
+    stagingName,
+    phase: "prepared",
+    startedAt: new Date().toISOString(),
+  };
+  await atomicWriteJson(paths.qmdSwap, journal);
+
+  const currentExists = await fs.exists(join(current, "index.sqlite"));
+  if (currentExists) {
+    await fs.rm(previous, { recursive: true, force: true });
+    journal.phase = "previous-moved";
+    await atomicWriteJson(paths.qmdSwap, journal);
+    await fs.rename(current, previous);
+  }
+
+  journal.phase = "current-promoted";
+  await atomicWriteJson(paths.qmdSwap, journal);
+  await fs.rename(staging, current);
+
+  // Reopen and validate the promoted current: openable AND matching the
+  // authoritative document count (manifest entry count, state file fallback).
+  await withStore(
+    factory,
+    { dbPath: join(current, "index.sqlite"), documentsPath: paths.qmdDocuments },
+    async (store) => {
+      const status = await store.status();
+      const expected = await expectedDocumentCount(paths, fs);
+      if (expected !== undefined && status.totalDocuments !== expected) {
+        throw new QmdIndexError(
+          "qmd_index_error",
+          `Promoted store validation failed: expected ${expected} documents, got ${status.totalDocuments}`,
+        );
+      }
+    },
+  );
+
+  journal.phase = "validated";
+  await atomicWriteJson(paths.qmdSwap, journal);
+  await fs.rm(previous, { recursive: true, force: true });
+  await fs.rm(paths.qmdSwap, { recursive: true, force: true });
+  await fsRm(join(paths.qmd, "last-error.json"), { recursive: true, force: true });
 }
 
 /**
@@ -608,48 +751,10 @@ export async function reindexQmdVault(
         },
       );
 
-      // Journaled swap.
+      // Journaled swap: every phase is durable intent published before the
+      // destructive rename it covers; recovery uses journal + filesystem state.
       onProgress?.({ stage: "swap", message: "Promoting validated index" });
-      const operationId = randomUUID();
-      const journal: QmdSwapJournal = {
-        version: 1,
-        operationId,
-        stagingName,
-        phase: "prepared",
-        startedAt: new Date().toISOString(),
-      };
-      await atomicWriteJson(paths.qmdSwap, journal);
-
-      const currentExistsNow = await fs.exists(join(paths.qmdCurrent, "index.sqlite"));
-      const previous = join(paths.qmd, "previous");
-      if (currentExistsNow) {
-        await fs.rm(previous, { recursive: true, force: true });
-        await fs.rename(paths.qmdCurrent, previous);
-        journal.phase = "previous-moved";
-        await atomicWriteJson(paths.qmdSwap, journal);
-      }
-
-      await fs.rename(staging, paths.qmdCurrent);
-      journal.phase = "current-promoted";
-      await atomicWriteJson(paths.qmdSwap, journal);
-
-      onProgress?.({ stage: "validate", message: "Validating promoted index" });
-      await withStore(
-        factory,
-        { dbPath: join(paths.qmdCurrent, "index.sqlite"), documentsPath: paths.qmdDocuments },
-        async (store) => {
-          const status = await store.status();
-          checkCancelled(signal);
-          if (status.totalDocuments !== totalDocuments) {
-            throw new QmdIndexError("qmd_index_error", "Promoted store validation failed");
-          }
-        },
-      );
-
-      journal.phase = "validated";
-      await atomicWriteJson(paths.qmdSwap, journal);
-      await fs.rm(previous, { recursive: true, force: true });
-      await fs.rm(paths.qmdSwap, { recursive: true, force: true });
+      await promoteStagingToCurrent(paths, stagingName, factory, fs);
       await fsRm(join(paths.qmd, "last-error.json"), { recursive: true, force: true });
 
       const status = await readQmdIndexStatus(paths);
@@ -782,42 +887,8 @@ export async function invalidateQmdAfterProjectionFailure(
         },
       } as QmdIndexStateFile);
 
-      const journal: QmdSwapJournal = {
-        version: 1,
-        operationId: randomUUID(),
-        stagingName,
-        phase: "prepared",
-        startedAt: new Date().toISOString(),
-      };
-      await atomicWriteJson(paths.qmdSwap, journal);
-
-      const previous = join(paths.qmd, "previous");
-      if (await fs.exists(join(paths.qmdCurrent, "index.sqlite"))) {
-        await fs.rm(previous, { recursive: true, force: true });
-        await fs.rename(paths.qmdCurrent, previous);
-        journal.phase = "previous-moved";
-        await atomicWriteJson(paths.qmdSwap, journal);
-      }
-      await fs.rename(staging, paths.qmdCurrent);
-      journal.phase = "current-promoted";
-      await atomicWriteJson(paths.qmdSwap, journal);
-
-      await withStore(
-        factory,
-        { dbPath: join(paths.qmdCurrent, "index.sqlite"), documentsPath: paths.qmdDocuments },
-        async (store) => {
-          const status = await store.status();
-          if (status.totalDocuments !== totalDocuments) {
-            throw new QmdIndexError("qmd_index_error", "Promoted store validation failed");
-          }
-        },
-      );
-
-      journal.phase = "validated";
-      await atomicWriteJson(paths.qmdSwap, journal);
-      await fs.rm(previous, { recursive: true, force: true });
-      await fs.rm(paths.qmdSwap, { recursive: true, force: true });
-      await fsRm(join(paths.qmd, "last-error.json"), { recursive: true, force: true });
+      // Journaled swap with write-ahead phases, shared with normal reindexing.
+      await promoteStagingToCurrent(paths, stagingName, factory, fs);
     } catch {
       // Generated QMD state is repairable; leave current intact. Status shows stale/error.
     } finally {
