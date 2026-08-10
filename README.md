@@ -570,14 +570,21 @@ Thanks to everyone who has contributed! This list is regenerated automatically b
                 </a>
             </td>
             <td align="center">
+                <a href="https://github.com/prestalab">
+                    <img src="https://avatars.githubusercontent.com/u/2825421?v=4" width="64;" alt="prestalab"/>
+                    <br />
+                    <sub><b>PrestaLab</b></sub>
+                </a>
+            </td>
+		</tr>
+		<tr>
+            <td align="center">
                 <a href="https://github.com/deestax">
                     <img src="https://avatars.githubusercontent.com/u/152369481?v=4" width="64;" alt="deestax"/>
                     <br />
                     <sub><b>Superdao</b></sub>
                 </a>
             </td>
-		</tr>
-		<tr>
             <td align="center">
                 <a href="https://github.com/mystery4f">
                     <img src="https://avatars.githubusercontent.com/u/40482524?v=4" width="64;" alt="mystery4f"/>
