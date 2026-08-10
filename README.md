@@ -47,9 +47,20 @@ Start with a new OKF vault, or point pi-llm-wiki at an existing vault and adopt 
 
 ## Quick Start
 
+**pi** ([`@mariozechner/pi-coding-agent`](https://github.com/badlogic/pi-mono)):
+
 ```bash
 pi install npm:@zosmaai/pi-llm-wiki
 ```
+
+**oh-my-pi** ([`omp`](https://github.com/can1357/oh-my-pi)):
+
+```bash
+omp install @zosmaai/pi-llm-wiki
+```
+
+Both hosts load the same extension, skill, and `/wiki-*` slash commands — see
+[Dual-host support](#dual-host-support-pi--oh-my-pi) for what differs.
 
 The extension will proactively suggest creating a wiki on your first session. Alternatively:
 
@@ -400,6 +411,55 @@ The same server as an entry in `.mcp.json` (Claude Code) or `claude_desktop_conf
 
 ---
 
+## Dual-host support (pi + oh-my-pi)
+
+The package targets two hosts from a single codebase:
+
+| | **pi** (`@mariozechner/pi-coding-agent`) | **oh-my-pi** (`omp`) |
+|---|---|---|
+| Extension entry | `package.json#pi.extensions` | `package.json#omp.extensions` (falls back to `#pi`) |
+| Skill | `skills/llm-wiki/SKILL.md` via `pi.skills` | same file, found by directory convention |
+| Slash commands | `prompts/*.md` via `pi.prompts` | `commands/*.md` (generated mirror of `prompts/`) |
+| Project config | `<cwd>/.pi/settings.json` | `<cwd>/.omp/settings.json`, then `.omp/config.yml` |
+| User config | `~/.pi/agent/settings.json` | `~/.omp/agent/settings.json`, then `config.yml` |
+| MCP server | auto-registered via `pi.mcpservers` | register manually (see below) |
+
+No source changes are needed for the imports: oh-my-pi rewrites
+`@mariozechner/pi-*` and bare `typebox` specifiers onto its own bundled
+packages when it loads a legacy extension.
+
+**Settings are read from both layouts.** `llm-wiki` config is merged from every
+file above, host-native directory last. A vault configured under pi keeps
+working after `omp` takes over the same repository, and writes land in whichever
+config directory already exists (so a `.pi`-only repo does not sprout a second
+settings file). Writes are always JSON — a hand-authored `config.yml` is read
+but never rewritten.
+
+Set `LLM_WIKI_HOST=pi|omp` to override host detection; by default it is derived
+from the resolved agent directory.
+
+**MCP under oh-my-pi.** `pi.mcpservers` is a pi-only manifest key, and the
+server's vault auto-detection depends on the client's working directory, so it
+cannot be declared with a relative path. Register it explicitly instead:
+
+```jsonc
+// <cwd>/.omp/.mcp.json
+{
+  "mcpServers": {
+    "llm-wiki": {
+      "command": "node",
+      "args": ["/abs/path/to/node_modules/@zosmaai/pi-llm-wiki/dist/mcp/index.js"],
+      "env": { "WIKI_ROOT": "/abs/path/to/your/wiki" }
+    }
+  }
+}
+```
+
+You rarely need it: under either host the extension already registers the same
+capabilities as native tools.
+
+---
+
 ## Skill Behavior
 
 The bundled `llm-wiki` skill teaches the model to:
@@ -525,14 +585,21 @@ Thanks to everyone who has contributed! This list is regenerated automatically b
                 </a>
             </td>
             <td align="center">
+                <a href="https://github.com/prestalab">
+                    <img src="https://avatars.githubusercontent.com/u/2825421?v=4" width="64;" alt="prestalab"/>
+                    <br />
+                    <sub><b>PrestaLab</b></sub>
+                </a>
+            </td>
+		</tr>
+		<tr>
+            <td align="center">
                 <a href="https://github.com/deestax">
                     <img src="https://avatars.githubusercontent.com/u/152369481?v=4" width="64;" alt="deestax"/>
                     <br />
                     <sub><b>Superdao</b></sub>
                 </a>
             </td>
-		</tr>
-		<tr>
             <td align="center">
                 <a href="https://github.com/mystery4f">
                     <img src="https://avatars.githubusercontent.com/u/40482524?v=4" width="64;" alt="mystery4f"/>

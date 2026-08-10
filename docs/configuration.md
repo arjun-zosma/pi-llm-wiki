@@ -31,10 +31,26 @@ The personal vault lives at `~/.llm-wiki/` (or `$WIKI_HOME`) and is always avail
 | ----------------------------- | ----------- | ----------------------------------------------- |
 | `WIKI_HOME`                   | `~/.llm-wiki` | Override the personal wiki vault location     |
 | `WIKI_MARKITDOWN_TIMEOUT_MS` | 180000      | Timeout (ms) for MarkItDown PDF/text extraction |
+| `LLM_WIKI_HOST`              | auto        | Force the host layout: `pi` or `omp`            |
 
-## Pi Agent Settings
+## Agent Settings
 
-Runtime settings for the wiki's background tasks live in `.pi/settings.json` under the `llm-wiki` namespace. These can be set globally (`~/.pi/agent/settings.json`) or per-project (`<cwd>/.pi/settings.json`).
+Runtime settings for the wiki's background tasks live under the `llm-wiki`
+namespace of the host's settings file. Both host layouts are read and merged,
+lowest precedence first:
+
+1. `<agentDir>/settings.json`, then `config.yml` / `config.yaml`
+   — `~/.pi/agent` under pi, `~/.omp/agent` under oh-my-pi
+2. `<cwd>/.pi/{settings.json,config.yml,config.yaml}`
+3. `<cwd>/.omp/{settings.json,config.yml,config.yaml}`
+
+The **host-native** project directory is applied last, so it wins: `.omp` under
+oh-my-pi, `.pi` under pi. Reading the other host's directory means a vault
+configured under pi keeps working after `omp` takes over the repository.
+
+`/wiki-model` and `/wiki-trajectories` write JSON only, into whichever project
+config directory already exists (host-native first, created if neither is
+present). A hand-authored `config.yml` is read but never rewritten.
 
 | Setting               | Default | Description                                                  |
 | --------------------- | ------- | ------------------------------------------------------------ |

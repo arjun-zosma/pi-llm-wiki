@@ -5,6 +5,7 @@ outputs/
 .DS_Store
 .pi-lens/
 .pi/
+.omp/
 coverage/
 dist/
 .llm-wiki/

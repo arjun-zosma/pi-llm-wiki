@@ -1,6 +1,11 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { getAgentDir } from "@mariozechner/pi-coding-agent";
+import { dirname } from "node:path";
+import { parse as parseYaml } from "yaml";
+import {
+  listGlobalSettingsFiles,
+  listProjectSettingsFiles,
+  resolveProjectSettingsPath,
+} from "./host.js";
 
 /**
  * Configuration for the background-task lane (issue #64, part of #63).
@@ -12,8 +17,11 @@ import { getAgentDir } from "@mariozechner/pi-coding-agent";
  *
  * Resolution order (later wins):
  *   1. built-in DEFAULTS
- *   2. global settings:  <agentDir>/settings.json  → { "llm-wiki": { ... } }
- *   3. project settings: <cwd>/.pi/settings.json    → { "llm-wiki": { ... } }
+ *   2. global settings:  <agentDir>/{settings.json,config.yml}
+ *   3. project settings: <cwd>/{.pi,.omp}/{settings.json,config.yml}
+ *
+ * Both host layouts are read (see ./host.ts): pi uses `.pi`, oh-my-pi uses
+ * `.omp`, and each file is keyed by the namespaced `llm-wiki` section.
  *
  * When `taskModel` is unset, the background lane falls back to the session
  * model (see Runtime.resolveModel), so the feature is zero-config by default.
@@ -235,14 +243,20 @@ export function validateSynthesisLanguage(tag: string): string | undefined {
 }
 
 /**
- * Read a settings JSON file as a plain object, or `{}` when it is absent or
+ * Read a settings file as a plain object, or `{}` when it is absent or
  * corrupt. Reads directly (no `existsSync` pre-check) so there is no
  * check-then-use race: a missing file throws ENOENT, which the catch treats
  * the same as an empty file.
+ *
+ * `config.yml` / `config.yaml` are parsed as YAML — that is the format oh-my-pi
+ * migrates its settings to. Everything else is JSON. JSON is a YAML subset, so
+ * the YAML parser also accepts a `.yml` file that actually holds JSON.
  */
 function readSettingsObject(path: string): Record<string, unknown> {
   try {
-    const parsed = JSON.parse(readFileSync(path, "utf-8"));
+    const text = readFileSync(path, "utf-8");
+    const parsed =
+      path.endsWith(".yml") || path.endsWith(".yaml") ? parseYaml(text) : JSON.parse(text);
     if (parsed && typeof parsed === "object") return parsed as Record<string, unknown>;
   } catch {
     // Missing or corrupt settings file: start from an empty object.
@@ -251,30 +265,25 @@ function readSettingsObject(path: string): Record<string, unknown> {
 }
 
 /**
- * Persist (or clear) the wiki background `taskModel` in the PROJECT settings
- * file `<cwd>/.pi/settings.json` under the namespaced `llm-wiki` key (issue
- * #69). Project settings win over global in `loadTaskConfig`, so this takes
- * effect immediately on the next config load. Other top-level keys and other
- * `llm-wiki` settings are preserved; passing `undefined` removes the key
- * (reverting to the session model).
+ * Rewrite the `llm-wiki` section of the project settings file, preserving every
+ * other top-level key and every other setting in the section.
+ *
+ * The target file is chosen by `resolveProjectSettingsPath` — `.pi/settings.json`
+ * or `.omp/settings.json` depending on host and on what already exists — and is
+ * always JSON, which both hosts read.
  */
-export function persistTaskModel(
+function updateProjectSection(
   cwd: string,
-  model: { provider: string; id: string } | undefined,
+  mutate: (section: Record<string, unknown>) => void,
 ): void {
-  const settingsPath = join(cwd, ".pi", "settings.json");
+  const settingsPath = resolveProjectSettingsPath(cwd);
   const raw = readSettingsObject(settingsPath);
 
   const existing = raw[SETTINGS_KEY];
   const section: Record<string, unknown> =
     existing && typeof existing === "object" ? { ...(existing as Record<string, unknown>) } : {};
 
-  if (model) {
-    section.taskModel = { provider: model.provider, id: model.id };
-  } else {
-    // biome-ignore lint/performance/noDelete: one-off settings rewrite, not a hot path; removing the key (vs setting undefined) keeps the JSON clean
-    delete section.taskModel;
-  }
+  mutate(section);
   raw[SETTINGS_KEY] = section;
 
   mkdirSync(dirname(settingsPath), { recursive: true });
@@ -282,44 +291,55 @@ export function persistTaskModel(
 }
 
 /**
- * Persist the agent-trajectory flag in the PROJECT settings file
- * `<cwd>/.pi/settings.json` under the namespaced `llm-wiki` key (issue #80).
- * Mirrors `persistTaskModel`: project settings win in `loadTaskConfig`, other
- * keys are preserved. `true` writes `trajectories: true`; `false` removes the
- * key (reverting to the default-off behavior).
+ * Persist (or clear) the wiki background `taskModel` in the PROJECT settings
+ * file under the namespaced `llm-wiki` key (issue #69). Project settings win
+ * over global in `loadTaskConfig`, so this takes effect immediately on the next
+ * config load. Passing `undefined` removes the key (reverting to the session
+ * model).
  */
-export function persistTrajectoriesEnabled(cwd: string, enabled: boolean): void {
-  const settingsPath = join(cwd, ".pi", "settings.json");
-  const raw = readSettingsObject(settingsPath);
-
-  const existing = raw[SETTINGS_KEY];
-  const section: Record<string, unknown> =
-    existing && typeof existing === "object" ? { ...(existing as Record<string, unknown>) } : {};
-
-  if (enabled) {
-    section.trajectories = true;
-  } else {
-    // biome-ignore lint/performance/noDelete: one-off settings rewrite, not a hot path; removing the key keeps the JSON clean (default is off)
-    delete section.trajectories;
-  }
-  raw[SETTINGS_KEY] = section;
-
-  mkdirSync(dirname(settingsPath), { recursive: true });
-  writeFileSync(settingsPath, `${JSON.stringify(raw, null, 2)}\n`, "utf-8");
+export function persistTaskModel(
+  cwd: string,
+  model: { provider: string; id: string } | undefined,
+): void {
+  updateProjectSection(cwd, (section) => {
+    if (model) {
+      section.taskModel = { provider: model.provider, id: model.id };
+    } else {
+      // biome-ignore lint/performance/noDelete: one-off settings rewrite, not a hot path; removing the key (vs setting undefined) keeps the JSON clean
+      delete section.taskModel;
+    }
+  });
 }
 
-export function loadTaskConfig(cwd: string): TaskConfig {
-  let globalPath: string;
-  try {
-    globalPath = join(getAgentDir(), "settings.json");
-  } catch {
-    globalPath = "";
-  }
-  const projectPath = join(cwd, ".pi", "settings.json");
+/**
+ * Persist the agent-trajectory flag in the PROJECT settings file under the
+ * namespaced `llm-wiki` key (issue #80). Mirrors `persistTaskModel`: `true`
+ * writes `trajectories: true`; `false` removes the key (reverting to the
+ * default-off behavior).
+ */
+export function persistTrajectoriesEnabled(cwd: string, enabled: boolean): void {
+  updateProjectSection(cwd, (section) => {
+    if (enabled) {
+      section.trajectories = true;
+    } else {
+      // biome-ignore lint/performance/noDelete: one-off settings rewrite, not a hot path; removing the key keeps the JSON clean (default is off)
+      delete section.trajectories;
+    }
+  });
+}
 
-  return {
-    ...TASK_DEFAULTS,
-    ...(globalPath ? readNamespacedConfig(globalPath) : {}),
-    ...readNamespacedConfig(projectPath),
-  };
+/**
+ * Merge the `llm-wiki` section from every settings file both hosts may use,
+ * lowest precedence first: built-in defaults, then user-level files, then
+ * project-level files. Absent files contribute nothing.
+ */
+export function loadTaskConfig(cwd: string): TaskConfig {
+  const config: TaskConfig = { ...TASK_DEFAULTS };
+  for (const path of listGlobalSettingsFiles()) {
+    Object.assign(config, readNamespacedConfig(path));
+  }
+  for (const path of listProjectSettingsFiles(cwd)) {
+    Object.assign(config, readNamespacedConfig(path));
+  }
+  return config;
 }
