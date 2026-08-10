@@ -180,11 +180,9 @@ export async function reconcileQmdMirror(
   diagnostics.push(...discovery.diagnostics);
 
   let prior: QmdManifest;
-  let manifestInvalid = false;
   try {
     prior = await readQmdManifest(paths, vaultId);
   } catch (error) {
-    manifestInvalid = true;
     prior = { version: QMD_MANIFEST_VERSION, vaultId, entries: {} };
     diagnostics.push(
       mirrorDiagnostic("qmd_manifest_invalid", paths.qmdManifest, (error as Error).message),
@@ -264,7 +262,6 @@ export async function reconcileQmdMirror(
   }
 
   const finalManifest = desired;
-  void manifestInvalid;
   return {
     manifest: finalManifest,
     manifestHash: hashQmdManifest(finalManifest),
@@ -293,7 +290,7 @@ async function removeOrphans(paths: VaultPaths, desired: QmdManifest): Promise<v
       const full = join(dir, entry.name);
       if (entry.isDirectory()) {
         await walk(full);
-        let stillEmpty = true;
+        let stillEmpty: boolean;
         try {
           stillEmpty = (await readdir(full)).length === 0;
         } catch {
