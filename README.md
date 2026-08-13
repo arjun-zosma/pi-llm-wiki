@@ -408,6 +408,7 @@ The package targets two hosts from a single codebase:
 | Project config | `<cwd>/.pi/settings.json` | `<cwd>/.omp/settings.json`, then `.omp/config.yml` |
 | User config | `~/.pi/agent/settings.json` | `~/.omp/agent/settings.json`, then `config.yml` |
 | MCP server | auto-registered via `pi.mcpservers` | register manually (see below) |
+| Ambient surfaces without a project wiki | on (personal vault) | off — see below |
 
 No source changes are needed for the imports: oh-my-pi rewrites
 `@mariozechner/pi-*` and bare `typebox` specifiers onto its own bundled
@@ -422,6 +423,16 @@ but never rewritten.
 
 Set `LLM_WIKI_HOST=pi|omp` to override host detection; by default it is derived
 from the resolved agent directory.
+
+**Ambient surfaces are gated under oh-my-pi.** The session notice, the periodic
+observe/retro reminder, and `before_agent_start` recall all fire unprompted, and
+vault resolution falls back to the personal vault — so once `~/.llm-wiki/`
+exists they would speak up in *every* directory. Under pi that is the historical
+behaviour and it is kept; under omp the plugin is installed once and loads in
+every project, so a repository that never ran `/wiki-init` stays quiet. Override
+either default with `llm-wiki.ambientPersonalVault`. The wiki tools and slash
+commands are registered regardless, so `/wiki-init` always works — and a project
+with its own `.llm-wiki/` gets every surface back.
 
 **MCP under oh-my-pi.** `pi.mcpservers` is a pi-only manifest key, and the
 server's vault auto-detection depends on the client's working directory, so it
