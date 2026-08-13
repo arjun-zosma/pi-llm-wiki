@@ -151,15 +151,19 @@ export function isPersonalVault(paths: VaultPaths): boolean {
 }
 
 /**
- * Resolve vault root from cwd with personal fallback.
+ * Resolve the vault root that belongs to THIS project, or `null` when the
+ * project has none.
  *
  * Priority:
- * 1. cwd has .llm-wiki/ → project wiki (explicit)
- * 2. Walk up from cwd → parent project wiki
- * 3. ~/.llm-wiki/ exists → personal wiki
- * 4. Fallback: ~/.llm-wiki/ (create personal wiki)
+ * 1. cwd has `.llm-wiki/` (or legacy `.wiki/`) → project wiki (explicit)
+ * 2. `WIKI_HOME` → user-selected root, explicit enough to count as the project's
+ * 3. Walk up from cwd → parent project wiki (monorepo / nested workspace)
+ *
+ * Deliberately does NOT fall back to the personal wiki: callers that need the
+ * fallback use {@link resolveVaultRoot}, callers that must distinguish "this
+ * project has a wiki" from "some wiki exists somewhere" use this.
  */
-export function resolveVaultRoot(cwd: string): string {
+export function resolveProjectVaultRoot(cwd: string): string | null {
   // A vault rooted at cwd is always the project-local choice.
   if (detectVaultFormat(cwd) !== "none") return cwd;
 
@@ -167,19 +171,36 @@ export function resolveVaultRoot(cwd: string): string {
   // over an unrelated personal vault found while walking parent directories.
   if (process.env.WIKI_HOME) return process.env.WIKI_HOME;
 
-  // Walk up looking for a vault sentinel (new or legacy)
+  // Walk up looking for a vault sentinel (new or legacy).
   let dir = cwd;
   while (dir !== dirname(dir)) {
     dir = dirname(dir);
-    if (detectVaultFormat(dir) !== "none") return dir;
+    if (detectVaultFormat(dir) === "none") continue;
+    // Skip the personal vault: it is an ancestor of EVERY project under the
+    // home directory (`~/projects/foo`, and on Windows even the temp dir), so
+    // counting it here would report a project vault for directories that have
+    // none. `resolveVaultRoot` still falls back to it explicitly.
+    if (isPersonalVault(getVaultPaths(dir))) continue;
+    return dir;
   }
 
-  // Check personal wiki at ~/.llm-wiki/
-  const personalRoot = getPersonalWikiRoot();
-  if (detectVaultFormat(personalRoot) !== "none") return personalRoot;
+  return null;
+}
 
-  // Fallback: personal wiki
-  return personalRoot;
+/**
+ * Resolve vault root from cwd with personal fallback.
+ *
+ * Priority:
+ * 1-3. {@link resolveProjectVaultRoot}
+ * 4. Personal wiki root (`~`, or `WIKI_HOME`) — used whether or not it already
+ *    holds a vault, so first-run bootstrap has somewhere to write.
+ */
+export function resolveVaultRoot(cwd: string): string {
+  // Realpath the personal fallback so a symlinked `$HOME` (atomic-OS layouts)
+  // yields the PHYSICAL root the ancestor walk used to return — the #145
+  // regression guard pins that. `realpathWithMissingTail` also covers first-run
+  // bootstrap, where the personal root does not exist on disk yet.
+  return resolveProjectVaultRoot(cwd) ?? realpathWithMissingTail(getPersonalWikiRoot());
 }
 
 /** Get all vault paths for the new (.llm-wiki) layout. */

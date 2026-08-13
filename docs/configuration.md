@@ -52,12 +52,13 @@ configured under pi keeps working after `omp` takes over the repository.
 config directory already exists (host-native first, created if neither is
 present). A hand-authored `config.yml` is read but never rewritten.
 
-| Setting               | Default | Description                                                  |
-| --------------------- | ------- | ------------------------------------------------------------ |
-| `taskModel`           | —       | Model for background tasks (`{ provider: "openai", id: "gpt-4o" }`) |
-| `synthesisLanguage`   | —       | BCP 47 language tag for ingest synthesis (e.g. `"ru"`, `"fr"`). When unset, synthesis defaults to English. |
-| `trajectories`        | false   | Enable agent-trajectory working-memory                       |
-| `notices`             | true    | Show wiki activity notices in chat                           |
+| Setting                | Default    | Description                                                  |
+| ---------------------- | ---------- | ------------------------------------------------------------ |
+| `taskModel`            | —          | Model for background tasks (`{ provider: "openai", id: "gpt-4o" }`) |
+| `synthesisLanguage`    | —          | BCP 47 language tag for ingest synthesis (e.g. `"ru"`, `"fr"`). When unset, synthesis defaults to English. |
+| `trajectories`         | false      | Enable agent-trajectory working-memory                       |
+| `notices`              | true       | Show wiki activity notices in chat                           |
+| `ambientPersonalVault` | host-dependent | Let the personal vault act as the ambient vault in projects that have no wiki. `true` under pi, `false` under oh-my-pi — see below. |
 
 Example:
 
@@ -81,6 +82,30 @@ The vault root is resolved in this priority order:
 2. **Personal vault**: fall back to `$WIKI_HOME` or `~/.llm-wiki/`
 
 This means when you're in a project with its own `.llm-wiki/`, that project wiki is active. When you're outside any project wiki, your personal `~/.llm-wiki/` takes over automatically.
+
+### Ambient surfaces in projects without a wiki
+
+Three surfaces fire without being asked: the session notice, the periodic
+observe/retro reminder, and the `before_agent_start` recall injection (plus its
+`<wiki_status>` system-prompt footer).
+
+Because vault resolution falls back to the personal vault, those surfaces would
+otherwise speak up in *every* directory as soon as `~/.llm-wiki/` exists —
+injecting reminders and unrelated cross-project recall hits into repositories
+where no wiki was ever initialized. Under oh-my-pi the plugin is installed once
+and loads in every project, so that fallback is **off** by default there; under
+pi the historical behaviour is kept.
+
+`ambientPersonalVault` overrides the host default in either direction:
+
+```json
+{ "llm-wiki": { "ambientPersonalVault": true } }
+```
+
+The gate only affects unprompted injections. Tools and slash commands are
+always registered, so `/wiki-init` and `wiki_bootstrap` work in any directory —
+and once a project has its own `.llm-wiki/`, every ambient surface turns back on
+for it.
 
 ## Page Frontmatter
 
