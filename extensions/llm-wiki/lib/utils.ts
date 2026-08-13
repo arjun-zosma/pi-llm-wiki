@@ -191,7 +191,11 @@ export function resolveProjectVaultRoot(cwd: string): string | null {
  *    holds a vault, so first-run bootstrap has somewhere to write.
  */
 export function resolveVaultRoot(cwd: string): string {
-  return resolveProjectVaultRoot(cwd) ?? getPersonalWikiRoot();
+  // Realpath the personal fallback so a symlinked `$HOME` (atomic-OS layouts)
+  // yields the PHYSICAL root the ancestor walk used to return — the #145
+  // regression guard pins that. `realpathWithMissingTail` also covers first-run
+  // bootstrap, where the personal root does not exist on disk yet.
+  return resolveProjectVaultRoot(cwd) ?? realpathWithMissingTail(getPersonalWikiRoot());
 }
 
 /** Get all vault paths for the new (.llm-wiki) layout. */
