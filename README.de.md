@@ -125,7 +125,9 @@ Das Ergebnis ist ein Wiki, das wächst, während du Quellen erfasst, Fragen stel
 | `wiki_search` | Search the generated wiki registry |
 | `wiki_lint` | Deterministic health checks (orphans, gaps, contradictions, auto-fix) |
 | `wiki_status` | Show counts, source states, and recent activity |
+| `wiki_observe` | Aktuelle Sitzung als zeitgestempelte, durchsuchbare Beobachtung im wiki vermerken |
 | `wiki_rebuild_meta` | Force a full metadata rebuild (registry, backlinks, index, log) |
+| `wiki_reindex_embeddings` | Semantische Embeddings neuer oder veralteter Seiten aktualisieren (no-op ohne Embedding-Provider) |
 | `wiki_log_event` | Append a structured event to the wiki activity log |
 | `wiki_watch` | Print a `crontab` line for automatic wiki updates (daily / weekly / hourly) — does not install it |
 | `wiki_capture_trajectory` _(opt-in)_ | Capture the completed task's tool-call trajectory (agent working-memory) |
@@ -147,10 +149,12 @@ Das Ergebnis ist ein Wiki, das wächst, während du Quellen erfasst, Fragen stel
 | `/wiki-status` | Show a concise operational summary |
 | `/wiki-digest [--period daily\|weekly]` | Generate a digest of recent activity |
 | `/wiki-retro` | Save atomic insights from completed tasks |
+| `/wiki-model [provider/id | session]` | Modell für Hintergrund-Aufgaben setzen (ohne Argument: interaktiver Auswahlbildschirm) |
 | `/wiki-req <concept>` | Decompose a concept into atomic, traceable requirement pages |
 | `/wiki-trajectories <on\|off>` | Enable/disable agent working-memory (opt-in, off by default) |
 | `/wiki-record <title>` | Capture the completed task's trajectory (requires trajectories enabled) |
 | `/wiki-skills [query]` | Search distilled skills + past cases (requires trajectories enabled) |
+| `/wiki-settings` | Interaktive Einstellungensoberfläche — alle `llm-wiki`-Einstellungen in Projekt- oder globaler Sicht anzeigen/ändern |
 
 ---
 
