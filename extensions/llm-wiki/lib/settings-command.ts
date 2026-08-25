@@ -12,9 +12,11 @@ import {
 import type { Runtime } from "./runtime.js";
 import {
   type SettingScope,
+  loadTaskConfig,
   loadTaskConfigSources,
   parseModelRef,
   persistSetting,
+  trajectoriesEnabled,
 } from "./task-config.js";
 
 /**
@@ -335,11 +337,13 @@ class InputSubmenu extends Container {
 /** Header + settings list. ui.custom gives this component focus. */
 class SettingsScreen extends Container {
   private list: SettingsList;
+  private titleText: Text;
 
   constructor(title: string, list: SettingsList) {
     super();
     this.list = list;
-    this.addChild(new Text(title, 0, 0));
+    this.titleText = new Text(title, 0, 0);
+    this.addChild(this.titleText);
     this.addChild(new Spacer(1));
     this.addChild(list);
   }
@@ -347,6 +351,16 @@ class SettingsScreen extends Container {
   handleInput(data: string): void {
     this.list.handleInput(data);
   }
+
+  /** Update the header line in place (scope changes re-target it live). */
+  setTitle(title: string): void {
+    this.titleText.setText(title);
+  }
+}
+
+/** Build the header title for the scope currently being written to. */
+function scopeTitle(scope: SettingScope): string {
+  return `\u{1F9E0} LLM Wiki Settings \u2014 ${scope === "global" ? "Global" : "Project"} (Esc to close)`;
 }
 
 async function showSettingsTui(ui: Ui, cwd: string, scope: SettingScope): Promise<void> {
@@ -358,25 +372,53 @@ async function showSettingsTui(ui: Ui, cwd: string, scope: SettingScope): Promis
     return;
   }
 
-  const scopeLabel = scope === "global" ? "Global" : "Project";
-  const items = buildSettingItems(loadTaskConfigSources(cwd), ui.notify.bind(ui));
+  // The editable Scope row re-targets where subsequent writes land; the
+  // picker / inside-home heuristic only chooses the starting value.
+  let writeScope = scope;
+  const scopeItem: SettingItem = {
+    id: "scope",
+    label: "Scope",
+    currentValue: writeScope === "global" ? "Global" : "Project",
+    values: ["Global", "Project"],
+    description:
+      "Where edits are written. Global \u2192 ~/.pi/agent/settings.json \u00b7 Project \u2192 .pi/settings.json (this folder).",
+  };
+  const items = [scopeItem, ...buildSettingItems(loadTaskConfigSources(cwd), ui.notify.bind(ui))];
+  // Tracks the effective value so the reload note fires on actual changes.
+  let prevTrajectories = trajectoriesEnabled(loadTaskConfig(cwd));
 
   let list: SettingsList | undefined;
+  let screenRef: SettingsScreen | undefined;
 
   await ui.custom((_tui, theme, _keybindings, close) => {
     list = new SettingsList(
       items,
-      SETTINGS.length,
+      items.length,
       buildSettingsListTheme(theme),
       (id, display) => {
+        if (!list) return;
+        // Scope row: re-target writes; nothing is persisted for it.
+        if (id === "scope") {
+          writeScope = display === "Global" ? "global" : "project";
+          list.updateValue("scope", display);
+          screenRef?.setTitle(scopeTitle(writeScope));
+          ui.notify(
+            `LLM Wiki: writing to ${
+              writeScope === "global"
+                ? "Global (~/.pi/agent/settings.json)"
+                : "Project (.pi/settings.json)"
+            }`,
+          );
+          return;
+        }
         const def = SETTINGS.find((d) => d.key === id);
-        if (!def || !list) return;
+        if (!def) return;
         const value = parseDisplay(def, display);
         // Non-model, non-boolean values are validated before done(); undefined
         // here is only expected for the model-clear case.
         if (value === undefined && def.type !== "model") return;
         try {
-          persistSetting(cwd, scope, def.key, value);
+          persistSetting(cwd, writeScope, def.key, value);
         } catch (err) {
           ui.notify(
             `LLM Wiki: failed to save ${def.label}: ${err instanceof Error ? err.message : String(err)}`,
@@ -387,10 +429,22 @@ async function showSettingsTui(ui: Ui, cwd: string, scope: SettingScope): Promis
         // Normalize the displayed value in place (e.g. cleared model shows
         // "(session model)"; "0.50" becomes "0.5").
         list.updateValue(id, def.format(value));
+        // trajectories gates tool registration at startup, so a live toggle
+        // cannot add/remove the 3 tools mid-session \u2014 say so on real changes.
+        if (def.key === "trajectories") {
+          const next = Boolean(value);
+          if (next !== prevTrajectories) {
+            prevTrajectories = next;
+            ui.notify(
+              "LLM Wiki: trajectory tools register at startup \u2014 new value applies after a reload",
+            );
+          }
+        }
       },
       () => close(),
     );
-    return new SettingsScreen(`\u{1F9E0} LLM Wiki Settings — ${scopeLabel}  (Esc to close)`, list);
+    screenRef = new SettingsScreen(scopeTitle(writeScope), list);
+    return screenRef;
   });
 }
 

@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
@@ -168,17 +168,18 @@ describe("/wiki-settings screen", () => {
     await tick();
     const screen = ctx._screen!.current!;
 
-    // Items: 1 Model, 2 Synthesis Tokens, 3 Trajectories — move to #3.
+    // Items: 0 Scope, 1 Model, 2 Synthesis Tokens, 3 Trajectories — move to #3.
+    screen.handleInput(DOWN);
     screen.handleInput(DOWN);
     screen.handleInput(DOWN);
     screen.handleInput(SPACE);
 
     expect(loadTaskConfig(tmp).trajectories).toBe(true);
 
-    // No screen reset: cursor still on Trajectories (header+spacer + 2 items).
+    // No screen reset: cursor still on Trajectories (header+spacer + 3 items).
     const lines = screen.render(80);
-    expect(lines[SETTINGS_LINE_OFFSET + 2]).toContain("Trajectories");
-    expect(lines[SETTINGS_LINE_OFFSET + 2]).toContain("→");
+    expect(lines[SETTINGS_LINE_OFFSET + 3]).toContain("Trajectories");
+    expect(lines[SETTINGS_LINE_OFFSET + 3]).toContain("→");
 
     // Toggle back off.
     screen.handleInput(SPACE);
@@ -202,6 +203,7 @@ describe("/wiki-settings screen", () => {
 
     // Item 2 = Synthesis Tokens. Enter opens its input submenu (raw prefill).
     screen.handleInput(DOWN);
+    screen.handleInput(DOWN);
     screen.handleInput(ENTER);
     keys(screen, BACKSPACE, 16);
     screen.handleInput("999999");
@@ -217,10 +219,10 @@ describe("/wiki-settings screen", () => {
       : {};
     expect(projectJson["llm-wiki"]?.synthesisMaxTokens).toBeUndefined();
 
-    // Cursor restored to Synthesis Tokens.
+    // Cursor restored to Synthesis Tokens (item row 2).
     const lines = screen.render(80);
-    expect(lines[SETTINGS_LINE_OFFSET + 1]).toContain("Synthesis Tokens");
-    expect(lines[SETTINGS_LINE_OFFSET + 1]).toContain("→");
+    expect(lines[SETTINGS_LINE_OFFSET + 2]).toContain("Synthesis Tokens");
+    expect(lines[SETTINGS_LINE_OFFSET + 2]).toContain("→");
 
     screen.handleInput(ESC);
     await pending;
@@ -236,6 +238,7 @@ describe("/wiki-settings screen", () => {
     await tick();
     const screen = ctx._screen!.current!;
 
+    screen.handleInput(DOWN);
     screen.handleInput(DOWN);
     screen.handleInput(ENTER);
     keys(screen, BACKSPACE, 16);
@@ -264,16 +267,17 @@ describe("/wiki-settings screen", () => {
     await tick();
     const screen = ctx._screen!.current!;
 
-    // Item 1 = Model (cursor starts there), empty prefill. Enter + type.
+    // Item 1 = Model (cursor starts on the Scope row). Enter + type.
+    screen.handleInput(DOWN);
     screen.handleInput(ENTER);
     screen.handleInput("openai/gpt-4o");
     screen.handleInput(ENTER);
     expect(loadTaskConfig(tmp).taskModel).toEqual({ provider: "openai", id: "gpt-4o" });
 
     let lines = screen.render(80);
-    expect(lines[SETTINGS_LINE_OFFSET]).toContain("Model");
-    expect(lines[SETTINGS_LINE_OFFSET]).toContain("openai/gpt-4o");
-    expect(lines[SETTINGS_LINE_OFFSET]).toContain("→");
+    expect(lines[SETTINGS_LINE_OFFSET + 1]).toContain("Model");
+    expect(lines[SETTINGS_LINE_OFFSET + 1]).toContain("openai/gpt-4o");
+    expect(lines[SETTINGS_LINE_OFFSET + 1]).toContain("→");
 
     // Reopen, clear the prefill, empty submit → clears to session model.
     screen.handleInput(ENTER);
@@ -281,7 +285,7 @@ describe("/wiki-settings screen", () => {
     screen.handleInput(ENTER);
     expect(loadTaskConfig(tmp).taskModel).toBeUndefined();
     lines = screen.render(80);
-    expect(lines[SETTINGS_LINE_OFFSET]).toContain("(session model)");
+    expect(lines[SETTINGS_LINE_OFFSET + 1]).toContain("(session model)");
 
     screen.handleInput(ESC);
     await pending;
@@ -303,6 +307,102 @@ describe("/wiki-settings screen", () => {
     await tick();
     expect(selectCalls).toBe(1);
     void pending; // screen intentionally left open
+  });
+
+  it("shows a Scope row first, and cycling it re-targets where writes land", async () => {
+    const tmp = project("scope-cycle");
+    const ctx = makeCtx({
+      cwd: tmp,
+      select: async (_title, options) => options[0], // scope picker → Project
+    });
+    const pending = handler("", ctx);
+    await tick();
+    const screen = ctx._screen!.current!;
+
+    // Scope row is the first item, starting at Project.
+    let lines = screen.render(80);
+    expect(lines[SETTINGS_LINE_OFFSET]).toContain("Scope");
+    expect(lines[SETTINGS_LINE_OFFSET]).toContain("Project");
+
+    // Cycle Scope → Global (cursor starts on the Scope row).
+    screen.handleInput(SPACE);
+    lines = screen.render(80);
+    expect(lines[SETTINGS_LINE_OFFSET]).toContain("Global");
+
+    // Move to Notices (row 4) and toggle — the write must land in the
+    // (redirected) global file, not the project file.
+    screen.handleInput(DOWN);
+    screen.handleInput(DOWN);
+    screen.handleInput(DOWN);
+    screen.handleInput(DOWN);
+    screen.handleInput(SPACE);
+
+    expect(loadTaskConfig(tmp).notices).toBe(false);
+    const agentSettings = JSON.parse(
+      readFileSync(join(process.env.PI_CODING_AGENT_DIR!, "settings.json"), "utf8"),
+    ) as Record<string, Record<string, unknown>>;
+    expect(agentSettings["llm-wiki"]?.notices).toBe(false);
+    if (existsSync(join(tmp, ".pi", "settings.json"))) {
+      const projectJson = JSON.parse(
+        readFileSync(join(tmp, ".pi", "settings.json"), "utf8"),
+      ) as Record<string, Record<string, unknown>>;
+      expect(projectJson["llm-wiki"]?.notices).toBeUndefined();
+    }
+
+    screen.handleInput(ESC);
+    await pending;
+  });
+
+  it("scopes inside home to Global without asking", async () => {
+    const priorHome = process.env.HOME;
+    const fakeHome = outsideHomeDir("fakehome");
+    dirs.push(fakeHome);
+    process.env.HOME = fakeHome;
+    try {
+      const tmp = join(fakeHome, "proj");
+      mkdirSync(tmp, { recursive: true });
+      let pickerShown = false;
+      const ctx = makeCtx({
+        cwd: tmp,
+        select: async () => {
+          pickerShown = true;
+          return "Global";
+        },
+      });
+      const pending = handler("", ctx);
+      await tick();
+      const screen = ctx._screen!.current!;
+      const lines = screen.render(80);
+      expect(lines[SETTINGS_LINE_OFFSET]).toContain("Global"); // scope row, silent Global
+      expect(pickerShown).toBe(false);
+      screen.handleInput(ESC);
+      await pending;
+    } finally {
+      if (priorHome === undefined) delete process.env.HOME;
+      else process.env.HOME = priorHome;
+    }
+  });
+
+  it("notes that changing trajectories applies after a reload", async () => {
+    const tmp = project("traj-note");
+    const ctx = makeCtx({
+      cwd: tmp,
+      select: async (_title, options) => options[0], // scope: Project
+    });
+    const pending = handler("", ctx);
+    await tick();
+    const screen = ctx._screen!.current!;
+
+    screen.handleInput(DOWN);
+    screen.handleInput(DOWN);
+    screen.handleInput(DOWN);
+    screen.handleInput(SPACE); // Trajectories ON
+
+    expect(loadTaskConfig(tmp).trajectories).toBe(true);
+    expect(notifs(ctx).some((n) => /reload/i.test(n.message))).toBe(true);
+
+    screen.handleInput(ESC);
+    await pending;
   });
 });
 
