@@ -56,6 +56,16 @@ describe("KnowledgeDocument", () => {
     expect(serializeKnowledgeDocument(doc)).toBe("---\ntype: concept\n---\n\nBody\n");
   });
 
+  it("escapes aliased wikilinks in generated Markdown without changing fenced code", () => {
+    const doc = createKnowledgeDocument(
+      "concepts/table.md",
+      { type: "concept" },
+      "| Name |\n| --- |\n| [[entities/gildan|Gildan]] |\n\n```md\n[[entities/raw|Raw]]\n```",
+    );
+    expect(doc.body).toContain("[[entities/gildan\\|Gildan]]");
+    expect(doc.body).toContain("[[entities/raw|Raw]]");
+  });
+
   it.each([
     ["frontmatter_duplicate_key", "---\ntype: concept\ntype: entity\n---\n"],
     ["frontmatter_alias_forbidden", "---\ntype: concept\nx: &x [1]\ny: *x\n---\n"],
