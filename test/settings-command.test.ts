@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir, homedir } from "node:os";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
@@ -378,6 +378,7 @@ describe("/wiki-settings screen", () => {
       screen.handleInput(ESC);
       await pending;
     } finally {
+      // biome-ignore lint/performance/noDelete: must truly unset; assigning undefined sets the string "undefined" in Node
       if (priorHome === undefined) delete process.env.HOME;
       else process.env.HOME = priorHome;
     }
