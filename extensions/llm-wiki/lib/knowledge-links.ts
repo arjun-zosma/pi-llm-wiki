@@ -33,13 +33,17 @@ function diag(
   return { severity, code, path, message };
 }
 
+function normalizeWikilinkTarget(target: string): string {
+  return target.trim().replace(/\\$/, "");
+}
+
 export function extractKnowledgeLinks(body: string): KnowledgeLinks {
   const markdown: ExtractedLink[] = [];
   const wikilinks: ExtractedLink[] = [];
 
-  // Extract legacy wikilinks
+  // Extract legacy wikilinks. A table-safe alias uses an escaped pipe: [[target\\|alias]].
   for (const match of body.matchAll(/\[\[([^\]|]+)(?:\|[^\]]*)?\]\]/g)) {
-    wikilinks.push({ target: match[1].trim(), offset: match.index ?? 0 });
+    wikilinks.push({ target: normalizeWikilinkTarget(match[1]), offset: match.index ?? 0 });
   }
 
   // Parse with CommonMark AST
@@ -111,7 +115,7 @@ export function extractKnowledgeLinks(body: string): KnowledgeLinks {
 export function extractLegacyWikilinks(body: string): ExtractedLink[] {
   const links: ExtractedLink[] = [];
   for (const match of body.matchAll(/\[\[([^\]|]+)(?:\|[^\]]*)?\]\]/g)) {
-    links.push({ target: match[1].trim(), offset: match.index ?? 0 });
+    links.push({ target: normalizeWikilinkTarget(match[1]), offset: match.index ?? 0 });
   }
   return links;
 }

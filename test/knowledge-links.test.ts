@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildResolvedBacklinks,
   extractKnowledgeLinks,
+  extractLegacyWikilinks,
 } from "../extensions/llm-wiki/lib/knowledge-links.js";
 
 const known = new Set([
@@ -45,11 +46,20 @@ describe("knowledge links", () => {
       "[root](/shared/root.md?x=1)",
       "[relative](../concepts/encoded%20name.md)",
       "[[concepts/inline|Inline]]",
+      "[[concepts/inline\\|Inline]]",
       "[external](https://example.com/x.md)",
     ].join("\n");
     const result = buildResolvedBacklinks("concepts/source", body, known);
     expect(result.targets).toEqual(["concepts/encoded name", "concepts/inline", "shared/root"]);
     expect(result.diagnostics).toEqual([]);
+  });
+
+  it("strips the escape before an aliased wikilink target", () => {
+    const body = "[[entities/gildan\\|Gildan]]";
+    expect(extractKnowledgeLinks(body).wikilinks).toEqual([
+      { target: "entities/gildan", offset: 0 },
+    ]);
+    expect(extractLegacyWikilinks(body)).toEqual([{ target: "entities/gildan", offset: 0 }]);
   });
 
   it("rejects bundle escape and reports unresolved internal targets", () => {

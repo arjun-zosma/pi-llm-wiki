@@ -508,7 +508,7 @@ export function buildDirectoryIndexes(
       lines.push("## Directories");
       lines.push("");
       for (const subDir of [...dirs].sort(compareCodePoint)) {
-        const encoded = `${encodeRelativePath(subDir)}/`;
+        const encoded = encodeRelativePath(`${subDir}/index.md`);
         lines.push(`- [${escapeLabel(subDir)}/](${encoded})`);
       }
     }
