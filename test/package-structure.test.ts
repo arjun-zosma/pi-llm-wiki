@@ -24,7 +24,11 @@ describe("package structure", () => {
     expect(pkg.pi.prompts).toContain("./prompts");
     expect(pkg.peerDependencies).toBeDefined();
     expect(pkg.peerDependencies["@mariozechner/pi-coding-agent"]).toBe("*");
-    expect(pkg.peerDependencies.typebox).toBe("*");
+    // `typebox` is imported at runtime by the dist extension modules, so it
+    // must be a real dependency — a fresh install without the pi host (e.g.
+    // MCP-only, peers omitted) has to resolve it (issue #153).
+    expect(pkg.peerDependencies.typebox).toBeUndefined();
+    expect(pkg.dependencies.typebox).toBeTruthy();
   });
 
   // oh-my-pi reads `package.json#omp` first and only falls back to `#pi`
