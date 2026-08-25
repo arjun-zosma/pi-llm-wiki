@@ -63,7 +63,7 @@ export function detectHost(): HostKind {
     if (segments.includes(".pi")) return "pi";
   }
 
-  if (process.env.OMP_PROFILE !== undefined) return "omp";
+  if (process.env.OMP_PROFILE) return "omp";
   return "pi";
 }
 
