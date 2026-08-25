@@ -111,7 +111,9 @@ pi install npm:@zosmaai/pi-llm-wiki
 | `wiki_search` | 搜索生成的 wiki 注册表 |
 | `wiki_lint` | 确定性健康检查（孤儿、缺口、矛盾、自动修复） |
 | `wiki_status` | 显示计数、来源状态和最近活动 |
+| `wiki_observe` | 记录当前会话的带时间戳、可搜索观察 |
 | `wiki_rebuild_meta` | 强制完整元数据重建（注册表、反向链接、索引、日志） |
+| `wiki_reindex_embeddings` | 为新增或过期的页面刷新语义嵌入（未配置 embedding 提供方时为空操作） |
 | `wiki_log_event` | 将结构化事件追加到 wiki 活动日志 |
 | `wiki_watch` | 打印自动 wiki 更新的 `crontab` 行（每日/每周/每小时）——不安装它 |
 | `wiki_capture_trajectory` _（可选）_ | 捕获已完成任务的工具调用轨迹（代理工作记忆） |
@@ -133,10 +135,12 @@ pi install npm:@zosmaai/pi-llm-wiki
 | `/wiki-status` | 显示简洁的操作摘要 |
 | `/wiki-digest [--period daily\|weekly]` | 生成最近活动的摘要 |
 | `/wiki-retro` | 保存已完成任务的原子洞察 |
+| `/wiki-model [provider/id | session]` | 设置后台任务模型（无参数时为交互式选择器） |
 | `/wiki-req <concept>` | 将概念分解为原子、可追踪的需求页面 |
 | `/wiki-trajectories <on\|off>` | 启用/禁用代理工作记忆（可选，默认关闭） |
 | `/wiki-record <title>` | 捕获已完成任务的轨迹（需要启用轨迹） |
 | `/wiki-skills [query]` | 搜索提炼的技能+过去案例（需要启用轨迹） |
+| `/wiki-settings` | 交互式设置屏幕 — 在 project/global 作用域下查看/修改全部 `llm-wiki` 设置 |
 
 ---
 

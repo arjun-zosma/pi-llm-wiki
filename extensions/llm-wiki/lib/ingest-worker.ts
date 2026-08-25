@@ -475,6 +475,8 @@ export interface RunIngestSynthesisArgs {
   signal?: AbortSignal;
   /** BCP 47 language tag for narrative content (issue #124). */
   synthesisLanguage?: string;
+  /** Max output tokens for synthesizer sub-agent (issue #160). Default 16384. */
+  synthesisMaxTokens?: number;
 }
 
 /**
@@ -496,6 +498,7 @@ export async function runIngestSynthesis(
     maxChars,
     signal,
     synthesisLanguage,
+    synthesisMaxTokens,
   } = args;
   const content = extracted.slice(0, maxChars ?? 24_000);
   if (!content.trim()) return undefined;
@@ -549,6 +552,7 @@ export async function runIngestSynthesis(
     systemPrompt,
     userPrompt,
     tools: [commitTool as AgentTool],
+    maxTokens: synthesisMaxTokens ?? 16384,
     signal,
   });
 

@@ -17,10 +17,12 @@
 | `/wiki-trajectories` | Enable/disable agent working-memory (`on`/`off`, opt-in) |
 | `/wiki-record`   | Capture the completed task's trajectory (requires trajectories enabled) |
 | `/wiki-skills`   | Search distilled skills + past cases (requires trajectories enabled) |
+| `/wiki-req` | Decompose a concept into atomic requirement pages |
+| `/wiki-settings` | Browse or change all `llm-wiki` settings (project or global scope) |
 
 ## Extension Tools
 
-The extension always registers 13 tools the LLM can call directly. The 3 agent-trajectory
+The extension always registers 14 tools the LLM can call directly. The 3 agent-trajectory
 tools (`wiki_capture_trajectory`, `wiki_distill_skills`, `wiki_recall_skill`) are **opt-in,
 off by default** (issue #80) — registered only when `llm-wiki.trajectories` is enabled
 (`/wiki-trajectories on`).
@@ -36,7 +38,9 @@ off by default** (issue #80) — registered only when `llm-wiki.trajectories` is
 | `wiki_search`         | Search the wiki registry                    |
 | `wiki_lint`           | Health check with auto-fix                  |
 | `wiki_status`         | Instant stats                               |
+| `wiki_observe` | Record a timestamped observation from the current session |
 | `wiki_rebuild_meta`   | Force metadata rebuild                      |
+| `wiki_reindex_embeddings` | Refresh semantic embeddings (no-op when no embedding provider) |
 | `wiki_log_event`      | Record custom event                         |
 | `wiki_watch`          | Schedule auto-updates                       |
 | `wiki_capture_trajectory` | Capture the completed task's tool-call trajectory |

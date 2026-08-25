@@ -6,6 +6,7 @@ import {
   detectHost,
   listGlobalSettingsFiles,
   listProjectSettingsFiles,
+  resolveGlobalSettingsPath,
   resolveProjectSettingsPath,
 } from "./host.js";
 
@@ -139,6 +140,13 @@ export interface TaskConfig {
    * source content and technical identifiers remain unchanged.
    */
   synthesisLanguage?: string;
+
+  /**
+   * Max output tokens for the synthesizer sub-agent (issue #160). Default 16384.
+   * Reasoning models consume tokens on thinking, so 4096 is too low — the
+   * response truncates before commit_synthesis can be called.
+   */
+  synthesisMaxTokens?: number;
 }
 
 export const TASK_DEFAULTS: TaskConfig = {};
@@ -238,6 +246,11 @@ function readNamespacedConfig(path: string): Partial<TaskConfig> {
       if (canonical) out.synthesisLanguage = canonical;
     }
 
+    const maxTokens = section.synthesisMaxTokens;
+    if (typeof maxTokens === "number" && Number.isFinite(maxTokens) && maxTokens > 0) {
+      out.synthesisMaxTokens = Math.floor(maxTokens);
+    }
+
     return out;
   } catch {
     return {};
@@ -302,6 +315,24 @@ function readSettingsObject(path: string): Record<string, unknown> {
     // Missing or corrupt settings file: start from an empty object.
   }
   return {};
+}
+
+/**
+ * Rewrite the `llm-wiki` section of the global settings file.
+ */
+function updateGlobalSection(mutate: (section: Record<string, unknown>) => void): void {
+  const settingsPath = resolveGlobalSettingsPath();
+  const raw = readSettingsObject(settingsPath);
+
+  const existing = raw[SETTINGS_KEY];
+  const section: Record<string, unknown> =
+    existing && typeof existing === "object" ? { ...(existing as Record<string, unknown>) } : {};
+
+  mutate(section);
+  raw[SETTINGS_KEY] = section;
+
+  mkdirSync(dirname(settingsPath), { recursive: true });
+  writeFileSync(settingsPath, `${JSON.stringify(raw, null, 2)}\n`, "utf-8");
 }
 
 /**
@@ -382,4 +413,75 @@ export function loadTaskConfig(cwd: string): TaskConfig {
     Object.assign(config, readNamespacedConfig(path));
   }
   return config;
+}
+
+// ── Settings source tracking (for /wiki-settings TUI) ──────────
+
+export type SettingScope = "default" | "global" | "project";
+
+/**
+ * Resolve where each setting is defined: project > global > default.
+ */
+/** All known setting keys — needed because TASK_DEFAULTS is {} (zero-config). */
+const KNOWN_KEYS = [
+  "taskModel",
+  "embeddingProvider",
+  "embeddingModel",
+  "embeddingBaseUrl",
+  "embeddingApiKey",
+  "embeddingApiKeyEnv",
+  "semanticWeight",
+  "recallLinksThreshold",
+  "recallSkillInlineMax",
+  "notices",
+  "ambientPersonalVault",
+  "trajectories",
+  "synthesisLanguage",
+  "synthesisMaxTokens",
+] as const;
+
+export function loadTaskConfigSources(
+  cwd: string,
+): Record<string, { value: unknown; source: SettingScope }> {
+  const globalResult: Record<string, unknown> = {};
+  for (const path of listGlobalSettingsFiles()) {
+    Object.assign(globalResult, readNamespacedConfig(path));
+  }
+  const projectResult: Record<string, unknown> = {};
+  for (const path of listProjectSettingsFiles(cwd)) {
+    Object.assign(projectResult, readNamespacedConfig(path));
+  }
+  const effective = loadTaskConfig(cwd);
+
+  const out: Record<string, { value: unknown; source: SettingScope }> = {};
+  for (const key of KNOWN_KEYS) {
+    if (key in projectResult) out[key] = { value: projectResult[key], source: "project" };
+    else if (key in globalResult) out[key] = { value: globalResult[key], source: "global" };
+    else out[key] = { value: (effective as Record<string, unknown>)[key], source: "default" };
+  }
+  return out;
+}
+
+/**
+ * Generic setting persist: writes any single setting to the chosen scope.
+ */
+export function persistSetting(
+  cwd: string,
+  scope: SettingScope,
+  key: string,
+  value: unknown,
+): void {
+  const mutate = (section: Record<string, unknown>) => {
+    if (value === undefined || value === null) {
+      delete section[key];
+    } else {
+      section[key] = value;
+    }
+  };
+
+  if (scope === "project") {
+    updateProjectSection(cwd, mutate);
+  } else if (scope === "global") {
+    updateGlobalSection(mutate);
+  }
 }

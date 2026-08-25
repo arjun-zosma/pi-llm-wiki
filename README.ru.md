@@ -125,7 +125,9 @@ The extension will proactively suggest creating a wiki on your first session. Al
 | `wiki_search` | Search the generated wiki registry |
 | `wiki_lint` | Deterministic health checks (orphans, gaps, contradictions, auto-fix) |
 | `wiki_status` | Show counts, source states, and recent activity |
+| `wiki_observe` | Записывает во wiki атомарные наблюдения текущей сессии с временн…уткой |
 | `wiki_rebuild_meta` | Force a full metadata rebuild (registry, backlinks, index, log) |
+| `wiki_reindex_embeddings` | Обновляет семантические эмбеддинги новых или устаревших страниц (no-op при отсутствии провайдера эмбеддингов) |
 | `wiki_log_event` | Append a structured event to the wiki activity log |
 | `wiki_watch` | Print a `crontab` line for automatic wiki updates (daily / weekly / hourly) — does not install it |
 | `wiki_capture_trajectory` _(opt-in)_ | Capture the completed task's tool-call trajectory (agent working-memory) |
@@ -147,10 +149,12 @@ The extension will proactively suggest creating a wiki on your first session. Al
 | `/wiki-status` | Show a concise operational summary |
 | `/wiki-digest [--period daily\|weekly]` | Generate a digest of recent activity |
 | `/wiki-retro` | Save atomic insights from completed tasks |
+| `/wiki-model [provider/id | session]` | Задаёт модель для фоновых задач (без аргумента — интерактивный выбор) |
 | `/wiki-req <concept>` | Decompose a concept into atomic, traceable requirement pages |
 | `/wiki-trajectories <on\|off>` | Enable/disable agent working-memory (opt-in, off by default) |
 | `/wiki-record <title>` | Capture the completed task's trajectory (requires trajectories enabled) |
 | `/wiki-skills [query]` | Search distilled skills + past cases (requires trajectories enabled) |
+| `/wiki-settings` | Интерактивный экран настроек — просмотр/изменение всех настроек `llm-wiki` в проектном или глобальном scope |
 
 ---
 

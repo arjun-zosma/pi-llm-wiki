@@ -123,3 +123,23 @@ export function resolveProjectSettingsPath(cwd: string, host: HostKind = detectH
 
   return join(native, "settings.json");
 }
+
+/**
+ * The global (user-level) settings file this extension writes to.
+ *
+ * Always writes to `settings.json` inside the agent dir — both hosts read it.
+ */
+export function resolveGlobalSettingsPath(host: HostKind = detectHost()): string {
+  let agentDir = "";
+  try {
+    agentDir = getAgentDir();
+  } catch {
+    agentDir = "";
+  }
+  if (!agentDir) {
+    // Fallback: ~/.pi/agent/settings.json
+    const home = process.env.HOME || "~";
+    return join(home, ".pi", "agent", "settings.json");
+  }
+  return join(agentDir, "settings.json");
+}
