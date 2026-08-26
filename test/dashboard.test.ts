@@ -119,7 +119,7 @@ async function makeRoot(): Promise<string> {
     },
   ];
   const good = events.map((e) => JSON.stringify(e)).join("\n");
-  await writeFile(path.join(vault, "meta", "events.jsonl"), [good, "\"broken\": true\""].join("\n"));
+  await writeFile(path.join(vault, "meta", "events.jsonl"), [good, 'broken": true'].join("\n"));
   return dir;
 }
 

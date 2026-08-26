@@ -141,6 +141,10 @@ pi install npm:@zosmaai/pi-llm-wiki
 | `/wiki-record <title>` | 捕获已完成任务的轨迹（需要启用轨迹） |
 | `/wiki-skills [query]` | 搜索提炼的技能+过去案例（需要启用轨迹） |
 | `/wiki-settings` | 交互式设置屏幕 — 在 project/global 作用域下查看/修改全部 `llm-wiki` 设置 |
+| `/wiki-dashboard` | 只读知识库仪表盘 — 页面数量/类型、新鲜度、7 日活动、入库队列、零反链页面、embedding 覆盖率 |
+
+<img src="./assets/wiki-dashboard.png" alt="wiki-dashboard: 知识库仪表盘" width="100%" />
+
 
 ---
 

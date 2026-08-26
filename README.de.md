@@ -155,6 +155,10 @@ Das Ergebnis ist ein Wiki, das wächst, während du Quellen erfasst, Fragen stel
 | `/wiki-record <title>` | Capture the completed task's trajectory (requires trajectories enabled) |
 | `/wiki-skills [query]` | Search distilled skills + past cases (requires trajectories enabled) |
 | `/wiki-settings` | Interaktive Einstellungensoberfläche — alle `llm-wiki`-Einstellungen in Projekt- oder globaler Sicht anzeigen/ändern |
+| `/wiki-dashboard` | Nur lesbare Vault-übersicht — Seiten je Typ, Aktualität, 7-Tage-Aktivität, Ingest-Warteschlange, Seiten ohne Backlinks, Embedding-Abdeckung |
+
+<img src="./assets/wiki-dashboard.png" alt="wiki-dashboard: Vault-übersicht" width="100%" />
+
 
 ---
 

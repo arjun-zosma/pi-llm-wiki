@@ -12,7 +12,6 @@
  * No writes, no LLM calls, no new files. Pure reader.
  */
 import { readFile, readdir, stat } from "node:fs/promises";
-import path from "node:path";
 import type { VaultPaths } from "./utils.js";
 import { readJson, resolveVaultPaths } from "./utils.js";
 

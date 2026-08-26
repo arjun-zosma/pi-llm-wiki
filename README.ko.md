@@ -155,6 +155,10 @@ The extension will proactively suggest creating a wiki on your first session. Al
 | `/wiki-record <title>` | Capture the completed task's trajectory (requires trajectories enabled) |
 | `/wiki-skills [query]` | Search distilled skills + past cases (requires trajectories enabled) |
 | `/wiki-settings` | 대화형 설정 화면 — `llm-wiki` 설정을 project/global 스코프로 보기/변경 |
+| `/wiki-dashboard` | 읽기 전용 볼트 대시보드 — 페이지 수/유형, 신선도, 7일 활동, ingest 대기열, 백링크 0 페이지, 임베딩 커버리지 |
+
+<img src="./assets/wiki-dashboard.png" alt="wiki-dashboard: 볼트 대시보드" width="100%" />
+
 
 ---
 
