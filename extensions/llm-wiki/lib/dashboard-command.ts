@@ -7,7 +7,7 @@
  * text through a Container + Text.
  */
 import type { ExtensionAPI, ExtensionCommandContext } from "@mariozechner/pi-coding-agent";
-import { Container, Text } from "@mariozechner/pi-tui";
+import { Container, Text, matchesKey } from "@mariozechner/pi-tui";
 import { type DashboardStats, collectDashboardStats } from "./dashboard.js";
 import type { Runtime } from "./runtime.js";
 
@@ -74,10 +74,11 @@ export class DashboardScreen extends Container {
   }
 
   handleInput(data: string): void {
-    // ponytail: escape/q both close — the screen is stateless, so there is
-    // no notion of a "current key" to disambiguate; add a navigate-up row
-    // later if a specific page's context ever matters.
-    if (data === "\u001b" || data === "q") {
+    // ponytail: matchesKey handles every terminal key shape (raw bytes,
+    // kitty CSI-u like \u001b[27u for Esc, ctrl combos) — a raw === "\u001b"
+    // check only works in terminals without the kitty keyboard protocol,
+    // which is exactly where Ghostty users' Esc went nowhere.
+    if (matchesKey(data, "escape") || matchesKey(data, "q")) {
       this.doneFn();
     }
   }

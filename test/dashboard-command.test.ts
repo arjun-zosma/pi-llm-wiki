@@ -140,10 +140,7 @@ async function makeFixtureRoot(): Promise<string> {
       title: "t1",
     },
   ];
-  await writeFile(
-    path.join(meta, "events.jsonl"),
-    events.map((e) => JSON.stringify(e)).join("\n"),
-  );
+  await writeFile(path.join(meta, "events.jsonl"), events.map((e) => JSON.stringify(e)).join("\n"));
   return dir;
 }
 
@@ -175,6 +172,21 @@ describe("/wiki-dashboard command", () => {
     expect(lines).toContain("zero-backlink 1");
     // Esc closes the screen, which resolves the handler.
     h.screen!.handleInput(ESC);
+    await wait;
+    expect(h.closed).toBe(true);
+  });
+
+  it("also closes on Escape under the kitty keyboard protocol (CSI-u form)", async () => {
+    const dir = await makeFixtureRoot();
+    const handler = captureHandler();
+    const h = makeCtx(dir, true);
+    const wait = handler("", h.ctx);
+    for (let i = 0; i < 50 && !h.screen; i++) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    expect(h.screen).toBeDefined();
+    // Ghostty et al. with kitty protocol v2 send bare Esc as CSI-u 27
+    h.screen!.handleInput("\u001b[27u");
     await wait;
     expect(h.closed).toBe(true);
   });
