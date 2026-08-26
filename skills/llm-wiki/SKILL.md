@@ -186,6 +186,8 @@ default is shown when unset). Booleans cycle in place with Enter/Space; numbers,
 model edit inline in a prefilled input. Every change persists immediately to the chosen scope
 (project or global). Setting the model to `session` clears `llm-wiki.taskModel` (back to the session model).
 
+### Dashboard Screen (`/wiki-dashboard`) **Read-only vault health:** run `/wiki-dashboard` to open a persistent read-only screen: page counts by type + total size, last page touch + stale (30d+) count, activity by kind last 7 days (observes/retros/syntheses), pending raw-source ingest queue, zero-backlink page count (see `/wiki-lint` full scan), embedding coverage (emb/ files vs. pages). All values computed from existing on-disk state — no writes, no LLM calls. Esc closes.
+
 ### Auto-Bootstrap (One-Time)
 
 The extension creates the wiki vault automatically on startup. On the first turn, it injects a directive asking you to infer topic and mode, then call:

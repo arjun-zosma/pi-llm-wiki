@@ -155,6 +155,10 @@ O resultado é um wiki que se acumula conforme você captura fontes, faz pergunt
 | `/wiki-record <title>` | Capture the completed task's trajectory (requires trajectories enabled) |
 | `/wiki-skills [query]` | Search distilled skills + past cases (requires trajectories enabled) |
 | `/wiki-settings` | Tela interativa de ajustes — ver/mudar todos os ajustes `llm-wiki` em escopo de projeto ou global |
+| `/wiki-dashboard` | Painel somente leitura do vault — páginas por tipo, frescor, atividade de 7 dias, fila de ingestão, páginas sem backlinks, cobertura de embeddings |
+
+<img src="./assets/wiki-dashboard.png" alt="wiki-dashboard: painel do vault" width="100%" />
+
 
 ---
 

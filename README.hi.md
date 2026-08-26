@@ -155,6 +155,10 @@ The extension will proactively suggest creating a wiki on your first session. Al
 | `/wiki-record <title>` | Capture the completed task's trajectory (requires trajectories enabled) |
 | `/wiki-skills [query]` | Search distilled skills + past cases (requires trajectories enabled) |
 | `/wiki-settings` | Interactive settings screen — saare `llm-wiki` settings ko project ya global scope में dekh/change करें |
+| `/wiki-dashboard` | केवल-पठन vault dashboard — पेज count/types, freshness, 7-दिवसीय activity, ingest queue, zero-backlink pages, embedding coverage |
+
+<img src="./assets/wiki-dashboard.png" alt="wiki-dashboard: vault dashboard" width="100%" />
+
 
 ---
 

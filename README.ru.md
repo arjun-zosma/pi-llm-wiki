@@ -155,6 +155,10 @@ The extension will proactively suggest creating a wiki on your first session. Al
 | `/wiki-record <title>` | Capture the completed task's trajectory (requires trajectories enabled) |
 | `/wiki-skills [query]` | Search distilled skills + past cases (requires trajectories enabled) |
 | `/wiki-settings` | Интерактивный экран настроек — просмотр/изменение всех настроек `llm-wiki` в проектном или глобальном scope |
+| `/wiki-dashboard` | Только чтение: страницы по типам, свежесть, активность за 7 дней, очередь ingest, страницы без backlinks, покрытие embeddings |
+
+<img src="./assets/wiki-dashboard.png" alt="wiki-dashboard: просмотр vault" width="100%" />
+
 
 ---
 

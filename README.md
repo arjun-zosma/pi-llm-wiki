@@ -154,6 +154,10 @@ The result is a wiki that **compounds** as you capture sources, ask questions, a
 | `/wiki-record <title>` | Capture the completed task's trajectory (requires trajectories enabled) |
 | `/wiki-skills [query]` | Search distilled skills + past cases (requires trajectories enabled) |
 | `/wiki-settings` | Interactive settings screen — view and change all `llm-wiki` settings in project or global scope |
+| `/wiki-dashboard` | Read-only vault dashboard — page counts/types, freshness, 7-day activity, ingest queue, zero-backlink pages, embedding coverage |
+
+<img src="./assets/wiki-dashboard.png" alt="wiki-dashboard: read-only vault health screen" width="100%" />
+
 
 ---
 

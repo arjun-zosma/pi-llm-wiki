@@ -19,6 +19,7 @@
 | `/wiki-skills`   | Search distilled skills + past cases (requires trajectories enabled) |
 | `/wiki-req` | Decompose a concept into atomic requirement pages |
 | `/wiki-settings` | Browse or change all `llm-wiki` settings (project or global scope) |
+| `/wiki-dashboard` | Read-only vault health: pages, freshness, activity, ingest queue, backlinks, embeddings |
 
 ## Extension Tools
 

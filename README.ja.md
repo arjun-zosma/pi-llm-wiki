@@ -155,6 +155,10 @@ The extension will proactively suggest creating a wiki on your first session. Al
 | `/wiki-record <title>` | Capture the completed task's trajectory (requires trajectories enabled) |
 | `/wiki-skills [query]` | Search distilled skills + past cases (requires trajectories enabled) |
 | `/wiki-settings` | インタラクティブな設定画面 — `llm-wiki` 設定を project/global スコープで一覧/変更 |
+| `/wiki-dashboard` | 読み取り専用のVaultダッシュボード — ページ数/タイプ、鮮度、7日間のアクティビティ、ingestキュー、バックリンク0ページ、embeddingカバレッジ |
+
+<img src="./assets/wiki-dashboard.png" alt="wiki-dashboard: Vaultヘルス画面" width="100%" />
+
 
 ---
 

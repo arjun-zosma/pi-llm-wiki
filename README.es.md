@@ -141,6 +141,10 @@ El resultado es un wiki que **se acumula** mientras capturas fuentes, haces preg
 | `/wiki-record <title>` | Captura la trayectoria de la tarea completada (requiere trayectorias activadas) |
 | `/wiki-skills [query]` | Busca habilidades destiladas + casos pasados (requiere trayectorias activadas) |
 | `/wiki-settings` | Pantalla interactiva de ajustes — ver/cambiar todos los ajustes `llm-wiki` en alcance de proyecto o global |
+| `/wiki-dashboard` | Panel de solo lectura del vault — páginas por tipo, frescura, actividad de 7 días, cola de ingestión, páginas sin backlinks, cobertura de embeddings |
+
+<img src="./assets/wiki-dashboard.png" alt="wiki-dashboard: panel del vault" width="100%" />
+
 
 ---
 
