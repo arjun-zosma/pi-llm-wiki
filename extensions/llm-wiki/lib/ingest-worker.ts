@@ -186,42 +186,22 @@ function getHeadings(lang?: string): Record<string, string> {
   };
 }
 
-function buildEntityPageBody(
-  title: string,
-  description: string,
-  sourceId: string,
-  lang?: string,
-): string {
+function buildEntityPageBody(title: string, description: string, sourceId: string): string {
   const desc = description.trim() || "One-line description.";
-  const h = getHeadings(lang);
   return `# ${title}
 
 ${desc}
-
-## ${h.overview}
-
-[Key facts]
 
 ## Links
 
 - [${sourceId}](/sources/${sourceId}.md)`;
 }
 
-function buildConceptPageBody(
-  title: string,
-  definition: string,
-  sourceId: string,
-  lang?: string,
-): string {
+function buildConceptPageBody(title: string, definition: string, sourceId: string): string {
   const def = definition.trim() || "One-line definition.";
-  const h = getHeadings(lang);
   return `# ${title}
 
 ${def}
-
-## ${h.definition}
-
-[Clear explanation]
 
 ## Links
 
@@ -399,7 +379,7 @@ export function commitSynthesis(
           created: date,
           updated: date,
         },
-        buildEntityPageBody(e.title, e.description, sourceId, lang),
+        buildEntityPageBody(e.title, e.description, sourceId),
         [{ id: sourceId, resource: `/sources/${sourceId}.md` }],
       );
       writeKnowledgeDocumentFile(pagePath, entityDoc);
@@ -425,7 +405,7 @@ export function commitSynthesis(
           created: date,
           updated: date,
         },
-        buildConceptPageBody(c.title, c.definition, sourceId, lang),
+        buildConceptPageBody(c.title, c.definition, sourceId),
         [{ id: sourceId, resource: `/sources/${sourceId}.md` }],
       );
       writeKnowledgeDocumentFile(pagePath, conceptDoc);
