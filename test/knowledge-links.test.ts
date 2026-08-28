@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildResolvedBacklinks,
+  buildWikilinkIndex,
   extractKnowledgeLinks,
   extractLegacyWikilinks,
 } from "../extensions/llm-wiki/lib/knowledge-links.js";
@@ -100,5 +101,78 @@ describe("knowledge links", () => {
       known,
     );
     expect(result.targets).toEqual(["concepts/inline"]);
+  });
+});
+
+describe("resolveWikilink normalization", () => {
+  it("resolves bare title against a unique page by slugified basename", () => {
+    const index = buildWikilinkIndex(["entities/zosma-harness", "concepts/other"]);
+    const result = buildResolvedBacklinks(
+      "sources/some-source",
+      "[[zosma harness]]",
+      index,
+    );
+    expect(result.targets).toEqual(["entities/zosma-harness"]);
+    expect(result.unresolved).toEqual([]);
+  });
+
+  it("resolves folder-qualified link with case/space drift", () => {
+    const index = buildWikilinkIndex(["concepts/attention-is-all-you-need"]);
+    const result = buildResolvedBacklinks(
+      "sources/some-source",
+      "[[concepts/Attention Is All You Need]]",
+      index,
+    );
+    expect(result.targets).toEqual(["concepts/attention-is-all-you-need"]);
+    expect(result.unresolved).toEqual([]);
+  });
+
+  it("reports ambiguous when bare title matches multiple pages", () => {
+    const index = buildWikilinkIndex(["entities/ibm", "concepts/ibm"]);
+    const result = buildResolvedBacklinks(
+      "sources/some-source",
+      "[[ibm]]",
+      index,
+    );
+    expect(result.targets).toEqual([]);
+    expect(result.unresolved).toEqual([]);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0].code).toBe("link_ambiguous");
+    expect(result.diagnostics[0].message).toContain("entities/ibm");
+    expect(result.diagnostics[0].message).toContain("concepts/ibm");
+  });
+
+  it("prefers exact match over normalized match", () => {
+    const index = buildWikilinkIndex(["entities/ibm", "concepts/ibm"]);
+    // Exact match wins even though normalized would be ambiguous for the bare slug
+    const result = buildResolvedBacklinks(
+      "sources/some-source",
+      "[[entities/ibm]]",
+      index,
+    );
+    expect(result.targets).toEqual(["entities/ibm"]);
+    expect(result.unresolved).toEqual([]);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("resolves link with case drift in folder-qualified path", () => {
+    const index = buildWikilinkIndex(["entities/google-brain"]);
+    const result = buildResolvedBacklinks(
+      "sources/some-source",
+      "[[Entities/Google-Brain]]",
+      index,
+    );
+    expect(result.targets).toEqual(["entities/google-brain"]);
+    expect(result.unresolved).toEqual([]);
+  });
+
+  it("resolves slugified trailing slash variant", () => {
+    const index = buildWikilinkIndex(["concepts/retrieval-augmented-generation"]);
+    const result = buildResolvedBacklinks(
+      "sources/some-source",
+      "[[concepts/Retrieval Augmented Generation]]",
+      index,
+    );
+    expect(result.targets).toEqual(["concepts/retrieval-augmented-generation"]);
   });
 });

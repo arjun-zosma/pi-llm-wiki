@@ -1,6 +1,7 @@
 import type { Definition, Link, LinkReference, Nodes, Root } from "mdast";
 import { fromMarkdown } from "mdast-util-from-markdown";
 import type { KnowledgeDiagnostic } from "./knowledge-document.js";
+import { slugify } from "./utils.js";
 import { compareCodePoint } from "./vault-format.js";
 
 export interface ExtractedLink {
@@ -118,6 +119,77 @@ export function extractLegacyWikilinks(body: string): ExtractedLink[] {
     links.push({ target: normalizeWikilinkTarget(match[1]), offset: match.index ?? 0 });
   }
   return links;
+}
+
+// ── Wikilink normalization ──────────────────────────────────────────
+
+export interface WikilinkIndex {
+  /** NFC-normalized id → canonical id. */
+  byExact: Map<string, string>;
+  /** Slugified full path → matching canonical ids. */
+  byNormPath: Map<string, string[]>;
+  /** Slugified basename (no folder) → matching canonical ids. */
+  byNormSlug: Map<string, string[]>;
+}
+
+export function buildWikilinkIndex(ids: Iterable<string>): WikilinkIndex {
+  const byExact = new Map<string, string>();
+  const byNormPath = new Map<string, string[]>();
+  const byNormSlug = new Map<string, string[]>();
+
+  function push<K>(map: Map<K, string[]>, key: K, value: string): void {
+    const existing = map.get(key);
+    if (existing) existing.push(value);
+    else map.set(key, [value]);
+  }
+
+  for (const id of ids) {
+    byExact.set(id.normalize("NFC"), id);
+    const segments = id.split("/");
+    const normFull = segments.map((s) => slugify(s)).join("/");
+    const normBase = slugify(segments[segments.length - 1]);
+    push(byNormPath, normFull, id);
+    push(byNormSlug, normBase, id);
+  }
+
+  return { byExact, byNormPath, byNormSlug };
+}
+
+export type WikilinkResolution =
+  | { kind: "resolved"; id: string }
+  | { kind: "ambiguous"; target: string; candidates: string[] }
+  | { kind: "missing"; target: string };
+
+export function resolveWikilink(
+  target: string,
+  index: WikilinkIndex,
+): WikilinkResolution {
+  const cleaned = target.trim().replace(/\\$/, "");
+  if (!cleaned) return { kind: "missing", target: "" };
+
+  // Fast path: exact NFC match
+  const exact = index.byExact.get(cleaned.normalize("NFC"));
+  if (exact) return { kind: "resolved", id: exact };
+
+  // Normalized full path (fixes case/space/slug drift in folder-qualified links)
+  const normFull = cleaned
+    .split("/")
+    .map((s) => slugify(s))
+    .join("/");
+  const pathHits = index.byNormPath.get(normFull);
+  if (pathHits && pathHits.length === 1) return { kind: "resolved", id: pathHits[0] };
+  if (pathHits && pathHits.length > 1)
+    return { kind: "ambiguous", target: cleaned, candidates: pathHits };
+
+  // Bare title: match by slugified basename (handles [[zosma harness]] → entities/zosma-harness)
+  if (!cleaned.includes("/")) {
+    const baseHits = index.byNormSlug.get(slugify(cleaned));
+    if (baseHits && baseHits.length === 1) return { kind: "resolved", id: baseHits[0] };
+    if (baseHits && baseHits.length > 1)
+      return { kind: "ambiguous", target: cleaned, candidates: baseHits };
+  }
+
+  return { kind: "missing", target: cleaned };
 }
 
 function resolveMarkdownTarget(
