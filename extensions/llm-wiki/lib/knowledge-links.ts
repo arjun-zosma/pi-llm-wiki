@@ -276,19 +276,10 @@ function resolveMarkdownTarget(
   return { kind: "empty" };
 }
 
-function resolveWikilinkTarget(
-  target: string,
-): { kind: "concept"; id: string } | { kind: "empty" } {
-  // Wikilinks are already bundle-relative concept IDs
-  const cleaned = target.trim();
-  if (!cleaned) return { kind: "empty" };
-  return { kind: "concept", id: cleaned };
-}
-
 export function buildResolvedBacklinks(
   sourceId: string,
   body: string,
-  knownIds: Set<string>,
+  index: WikilinkIndex,
 ): ResolvedBacklinks {
   const diagnostics: KnowledgeDiagnostic[] = [];
   const unresolved: UnresolvedKnowledgeLink[] = [];
@@ -317,37 +308,48 @@ export function buildResolvedBacklinks(
         ),
       );
     } else if (resolved.kind === "concept") {
-      const normalizedId = resolved.id.normalize("NFC");
-      if (knownIds.has(normalizedId)) {
-        targets.add(normalizedId);
+      const canonical = index.byExact.get(resolved.id.normalize("NFC"));
+      if (canonical) {
+        targets.add(canonical);
       } else {
-        unresolved.push({ target: normalizedId, syntax: "markdown" });
+        unresolved.push({ target: resolved.id, syntax: "markdown" });
         diagnostics.push(
-          diag("warning", "link_unresolved", `${sourceId}.md`, `Unresolved link: ${normalizedId}`),
+          diag(
+            "warning",
+            "link_unresolved",
+            `${sourceId}.md`,
+            `Unresolved link: ${resolved.id}`,
+          ),
         );
       }
     }
     // external and empty are silently ignored
   }
 
-  // Process wikilinks
+  // Process wikilinks (lenient: exact → normalized path → bare title)
   for (const link of allLinks.wikilinks) {
-    const resolved = resolveWikilinkTarget(link.target);
-    if (resolved.kind === "concept") {
-      const normalizedId = resolved.id.normalize("NFC");
-      if (knownIds.has(normalizedId)) {
-        targets.add(normalizedId);
-      } else {
-        unresolved.push({ target: normalizedId, syntax: "wikilink" });
-        diagnostics.push(
-          diag(
-            "warning",
-            "link_unresolved",
-            `${sourceId}.md`,
-            `Unresolved wikilink: ${normalizedId}`,
-          ),
-        );
-      }
+    const res = resolveWikilink(link.target, index);
+    if (res.kind === "resolved") {
+      targets.add(res.id);
+    } else if (res.kind === "ambiguous") {
+      diagnostics.push(
+        diag(
+          "warning",
+          "link_ambiguous",
+          `${sourceId}.md`,
+          `Ambiguous wikilink: ${res.target} (candidates: ${res.candidates.join(", ")})`,
+        ),
+      );
+    } else {
+      unresolved.push({ target: res.target, syntax: "wikilink" });
+      diagnostics.push(
+        diag(
+          "warning",
+          "link_unresolved",
+          `${sourceId}.md`,
+          `Unresolved wikilink: ${res.target}`,
+        ),
+      );
     }
   }
 

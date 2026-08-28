@@ -6,7 +6,7 @@ import {
   extractLegacyWikilinks,
 } from "../extensions/llm-wiki/lib/knowledge-links.js";
 
-const known = new Set([
+const knownIds = [
   "concepts/source",
   "concepts/inline",
   "concepts/full",
@@ -14,7 +14,8 @@ const known = new Set([
   "concepts/shortcut",
   "concepts/encoded name",
   "shared/root",
-]);
+];
+const index = buildWikilinkIndex(knownIds);
 
 describe("knowledge links", () => {
   it("extracts inline and used full/collapsed/shortcut references only", () => {
@@ -50,7 +51,7 @@ describe("knowledge links", () => {
       "[[concepts/inline\\|Inline]]",
       "[external](https://example.com/x.md)",
     ].join("\n");
-    const result = buildResolvedBacklinks("concepts/source", body, known);
+    const result = buildResolvedBacklinks("concepts/source", body, index);
     expect(result.targets).toEqual(["concepts/encoded name", "concepts/inline", "shared/root"]);
     expect(result.diagnostics).toEqual([]);
   });
@@ -67,7 +68,7 @@ describe("knowledge links", () => {
     const result = buildResolvedBacklinks(
       "concepts/source",
       "[escape](../../outside.md) [missing](missing.md)",
-      known,
+      index,
     );
     expect(result.targets).toEqual([]);
     expect(result.diagnostics.map((d) => d.code).sort()).toEqual([
@@ -78,9 +79,9 @@ describe("knowledge links", () => {
 
   it("turns malformed percent encoding into a diagnostic instead of throwing", () => {
     expect(() =>
-      buildResolvedBacklinks("concepts/source", "[bad](bad%ZZ.md)", known),
+      buildResolvedBacklinks("concepts/source", "[bad](bad%ZZ.md)", index),
     ).not.toThrow();
-    const result = buildResolvedBacklinks("concepts/source", "[bad](bad%ZZ.md)", known);
+    const result = buildResolvedBacklinks("concepts/source", "[bad](bad%ZZ.md)", index);
     expect(result.targets).toEqual([]);
     expect(result.diagnostics.map((diagnostic) => diagnostic.code)).toEqual(["link_unresolved"]);
   });
@@ -89,7 +90,7 @@ describe("knowledge links", () => {
     const result = buildResolvedBacklinks(
       "concepts/source",
       "[missing suffix](/shared/root)",
-      known,
+      index,
     );
     expect(result.targets).toEqual([]);
   });
@@ -98,7 +99,7 @@ describe("knowledge links", () => {
     const result = buildResolvedBacklinks(
       "concepts/source",
       "[one](inline.md) [[concepts/inline]] [two](./inline.md)",
-      known,
+      index,
     );
     expect(result.targets).toEqual(["concepts/inline"]);
   });
