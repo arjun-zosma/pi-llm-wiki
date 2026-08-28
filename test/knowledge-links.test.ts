@@ -108,11 +108,7 @@ describe("knowledge links", () => {
 describe("resolveWikilink normalization", () => {
   it("resolves bare title against a unique page by slugified basename", () => {
     const index = buildWikilinkIndex(["entities/zosma-harness", "concepts/other"]);
-    const result = buildResolvedBacklinks(
-      "sources/some-source",
-      "[[zosma harness]]",
-      index,
-    );
+    const result = buildResolvedBacklinks("sources/some-source", "[[zosma harness]]", index);
     expect(result.targets).toEqual(["entities/zosma-harness"]);
     expect(result.unresolved).toEqual([]);
   });
@@ -130,11 +126,7 @@ describe("resolveWikilink normalization", () => {
 
   it("reports ambiguous when bare title matches multiple pages", () => {
     const index = buildWikilinkIndex(["entities/ibm", "concepts/ibm"]);
-    const result = buildResolvedBacklinks(
-      "sources/some-source",
-      "[[ibm]]",
-      index,
-    );
+    const result = buildResolvedBacklinks("sources/some-source", "[[ibm]]", index);
     expect(result.targets).toEqual([]);
     expect(result.unresolved).toEqual([]);
     expect(result.diagnostics).toHaveLength(1);
@@ -146,11 +138,7 @@ describe("resolveWikilink normalization", () => {
   it("prefers exact match over normalized match", () => {
     const index = buildWikilinkIndex(["entities/ibm", "concepts/ibm"]);
     // Exact match wins even though normalized would be ambiguous for the bare slug
-    const result = buildResolvedBacklinks(
-      "sources/some-source",
-      "[[entities/ibm]]",
-      index,
-    );
+    const result = buildResolvedBacklinks("sources/some-source", "[[entities/ibm]]", index);
     expect(result.targets).toEqual(["entities/ibm"]);
     expect(result.unresolved).toEqual([]);
     expect(result.diagnostics).toEqual([]);
@@ -189,11 +177,7 @@ describe("resolveWikilink normalization", () => {
 
   it("existing slash-less link with whitespace matches by slug path", () => {
     const index = buildWikilinkIndex(["entities/zosma-harness"]);
-    const result = buildResolvedBacklinks(
-      "sources/src-1",
-      "[[entities/zosma harness]]",
-      index,
-    );
+    const result = buildResolvedBacklinks("sources/src-1", "[[entities/zosma harness]]", index);
     expect(result.targets).toEqual(["entities/zosma-harness"]);
     expect(result.unresolved).toEqual([]);
   });

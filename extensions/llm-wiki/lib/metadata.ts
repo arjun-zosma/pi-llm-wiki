@@ -11,7 +11,11 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import type { KnowledgeDiagnostic, KnowledgeDocument } from "./knowledge-document.js";
-import { buildResolvedBacklinks, buildWikilinkIndex, type WikilinkIndex } from "./knowledge-links.js";
+import {
+  type WikilinkIndex,
+  buildResolvedBacklinks,
+  buildWikilinkIndex,
+} from "./knowledge-links.js";
 import { type VaultPaths, isPathWithin, readJson } from "./utils.js";
 import {
   assertWritableVault,

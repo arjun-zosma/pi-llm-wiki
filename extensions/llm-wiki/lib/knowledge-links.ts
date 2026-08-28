@@ -160,10 +160,7 @@ export type WikilinkResolution =
   | { kind: "ambiguous"; target: string; candidates: string[] }
   | { kind: "missing"; target: string };
 
-export function resolveWikilink(
-  target: string,
-  index: WikilinkIndex,
-): WikilinkResolution {
+export function resolveWikilink(target: string, index: WikilinkIndex): WikilinkResolution {
   const cleaned = target.trim().replace(/\\$/, "");
   if (!cleaned) return { kind: "missing", target: "" };
 
@@ -314,12 +311,7 @@ export function buildResolvedBacklinks(
       } else {
         unresolved.push({ target: resolved.id, syntax: "markdown" });
         diagnostics.push(
-          diag(
-            "warning",
-            "link_unresolved",
-            `${sourceId}.md`,
-            `Unresolved link: ${resolved.id}`,
-          ),
+          diag("warning", "link_unresolved", `${sourceId}.md`, `Unresolved link: ${resolved.id}`),
         );
       }
     }
@@ -343,12 +335,7 @@ export function buildResolvedBacklinks(
     } else {
       unresolved.push({ target: res.target, syntax: "wikilink" });
       diagnostics.push(
-        diag(
-          "warning",
-          "link_unresolved",
-          `${sourceId}.md`,
-          `Unresolved wikilink: ${res.target}`,
-        ),
+        diag("warning", "link_unresolved", `${sourceId}.md`, `Unresolved wikilink: ${res.target}`),
       );
     }
   }
