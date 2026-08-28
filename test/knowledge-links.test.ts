@@ -176,4 +176,44 @@ describe("resolveWikilink normalization", () => {
     );
     expect(result.targets).toEqual(["concepts/retrieval-augmented-generation"]);
   });
+
+  it("exact match is returned even when normalization would find a different page", () => {
+    // Page exists at exactly `concepts/ibm` AND at `entities/ibm`
+    // The link `[[concepts/ibm]]` should resolve to `concepts/ibm` (exact)
+    // without ambiguity — normalization is only consulted when exact fails.
+    const index = buildWikilinkIndex(["concepts/ibm", "entities/ibm"]);
+    const result = buildResolvedBacklinks("sources/src-1", "[[concepts/ibm]]", index);
+    expect(result.targets).toEqual(["concepts/ibm"]);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("existing slash-less link with whitespace matches by slug path", () => {
+    const index = buildWikilinkIndex(["entities/zosma-harness"]);
+    const result = buildResolvedBacklinks(
+      "sources/src-1",
+      "[[entities/zosma harness]]",
+      index,
+    );
+    expect(result.targets).toEqual(["entities/zosma-harness"]);
+    expect(result.unresolved).toEqual([]);
+  });
+
+  it("ambiguous bare title does not resolve to any target", () => {
+    const index = buildWikilinkIndex(["entities/ibm", "concepts/ibm", "notes/ibm"]);
+    const result = buildResolvedBacklinks("sources/src-1", "[[ibm]]", index);
+    expect(result.targets).toEqual([]);
+    expect(result.unresolved).toEqual([]);
+    expect(result.diagnostics[0].code).toBe("link_ambiguous");
+    expect(result.diagnostics[0].message).toContain("entities/ibm");
+    expect(result.diagnostics[0].message).toContain("concepts/ibm");
+    expect(result.diagnostics[0].message).toContain("notes/ibm");
+  });
+
+  it("bare title that matches zero pages is reported as unresolved", () => {
+    const index = buildWikilinkIndex(["entities/ibm"]);
+    const result = buildResolvedBacklinks("sources/src-1", "[[nonexistent]]", index);
+    expect(result.targets).toEqual([]);
+    expect(result.unresolved).toEqual([{ target: "nonexistent", syntax: "wikilink" }]);
+    expect(result.diagnostics[0].code).toBe("link_unresolved");
+  });
 });
