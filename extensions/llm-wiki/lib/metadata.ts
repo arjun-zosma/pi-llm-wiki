@@ -11,7 +11,7 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import type { KnowledgeDiagnostic, KnowledgeDocument } from "./knowledge-document.js";
-import { buildResolvedBacklinks } from "./knowledge-links.js";
+import { buildResolvedBacklinks, buildWikilinkIndex, type WikilinkIndex } from "./knowledge-links.js";
 import { type VaultPaths, isPathWithin, readJson } from "./utils.js";
 import {
   assertWritableVault,
@@ -86,8 +86,8 @@ export function rebuildMetadata(paths: VaultPaths): ProjectionResult {
   const registry = buildRegistry(paths, documents);
 
   // Step 4: Build backlinks from discovered documents
-  const knownIds = new Set(documents.map((d) => d.id));
-  const backlinks = buildBacklinks(documents, knownIds, allDiagnostics);
+  const wikilinkIndex = buildWikilinkIndex(documents.map((d) => d.id));
+  const backlinks = buildBacklinks(documents, wikilinkIndex, allDiagnostics);
 
   const eventSource = readEventSource(join(paths.meta, "events.jsonl"));
   const eventLogResult = eventSource.available ? buildOkfLog(eventSource.content) : undefined;
@@ -245,7 +245,7 @@ function getSemanticTitle(doc: KnowledgeDocument): string {
 /** Build backlinks from discovered documents using shared link resolution. */
 function buildBacklinks(
   documents: KnowledgeDocument[],
-  knownIds: Set<string>,
+  index: WikilinkIndex,
   diagnostics: KnowledgeDiagnostic[],
 ): Backlinks {
   const inbound: Backlinks = {};
@@ -257,7 +257,7 @@ function buildBacklinks(
 
   // Resolve links for each document
   for (const doc of documents) {
-    const result = buildResolvedBacklinks(doc.id, doc.body, knownIds);
+    const result = buildResolvedBacklinks(doc.id, doc.body, index);
     diagnostics.push(...result.diagnostics);
     for (const target of result.targets) {
       if (inbound[target] && !inbound[target].includes(doc.id)) {
