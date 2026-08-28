@@ -890,7 +890,7 @@ function runWikiLint(paths: VaultPaths, autoFix: boolean): string {
     }
     for (const d of resolved.diagnostics) {
       if (d.code === "link_ambiguous") {
-        findings.push(d.message.replace(`Ambiguous wikilink: `, `Ambiguous: `));
+        findings.push(d.message.replace("Ambiguous wikilink: ", "Ambiguous: "));
       }
     }
   }
