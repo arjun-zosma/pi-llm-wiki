@@ -108,6 +108,27 @@ describe("commitSynthesis", () => {
     expect(res.contradictions).toBe(1);
   });
 
+  it("creates entity/concept pages without unfilled placeholder sections (issue #170)", () => {
+    const paths = getVaultPaths(wikiDir);
+    const res = commitSynthesis(paths, "SRC-001", MANIFEST, DATA, "2026-06-06");
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    const entity = readFileSync(join(paths.wiki, "entities", "google-brain.md"), "utf-8");
+    const concept = readFileSync(join(paths.wiki, "concepts", "transformer.md"), "utf-8");
+    // No unfilled placeholder sections left behind.
+    expect(entity).not.toContain("[Key facts]");
+    expect(entity).not.toContain("## Overview");
+    expect(concept).not.toContain("[Clear explanation]");
+    expect(concept).not.toContain("## Definition");
+    // The one-liner still leads the page, exactly once.
+    expect(entity).toContain("Research lab");
+    expect(concept).toContain("Attention-based seq model");
+    // Source link preserved.
+    expect(entity).toContain("[SRC-001](/sources/SRC-001.md)");
+    expect(concept).toContain("[SRC-001](/sources/SRC-001.md)");
+  });
+
   it("links (does not overwrite) pages that already exist", () => {
     const paths = getVaultPaths(wikiDir);
     const existing = join(paths.wiki, "entities", "google-brain.md");
