@@ -11,7 +11,7 @@ import {
   serializeKnowledgeDocument,
   writeKnowledgeDocumentFile,
 } from "./knowledge-document.js";
-import { buildResolvedBacklinks } from "./knowledge-links.js";
+import { buildResolvedBacklinks, buildWikilinkIndex } from "./knowledge-links.js";
 import { repairLegacyKnowledgeDocuments } from "./legacy-repair.js";
 import { type Registry, appendEvent, rebuildMetadata, rebuildMetadataLight } from "./metadata.js";
 import type { Runtime } from "./runtime.js";
@@ -871,7 +871,7 @@ function runWikiLint(paths: VaultPaths, autoFix: boolean): string {
 
   const discovery = discoverKnowledgeDocuments(paths);
   const pages = discovery.documents;
-  const knownIds = new Set(pages.map((page) => page.id));
+  const wikilinkIndex = buildWikilinkIndex(pages.map((page) => page.id));
   const inbound = Object.fromEntries(pages.map((page) => [page.id, 0]));
   const gapSources = new Map<string, Set<string>>();
   const findings: string[] = [];
@@ -879,7 +879,7 @@ function runWikiLint(paths: VaultPaths, autoFix: boolean): string {
   let contradictions = 0;
 
   for (const page of pages) {
-    const resolved = buildResolvedBacklinks(page.id, page.body, knownIds);
+    const resolved = buildResolvedBacklinks(page.id, page.body, wikilinkIndex);
     for (const target of resolved.targets) inbound[target]++;
     for (const unresolved of resolved.unresolved) {
       const sources = gapSources.get(unresolved.target) ?? new Set<string>();
@@ -887,6 +887,11 @@ function runWikiLint(paths: VaultPaths, autoFix: boolean): string {
       gapSources.set(unresolved.target, sources);
       missingPages++;
       findings.push(`Missing page: ${unresolved.target} (in ${page.id})`);
+    }
+    for (const d of resolved.diagnostics) {
+      if (d.code === "link_ambiguous") {
+        findings.push(d.message.replace(`Ambiguous wikilink: `, `Ambiguous: `));
+      }
     }
   }
 
