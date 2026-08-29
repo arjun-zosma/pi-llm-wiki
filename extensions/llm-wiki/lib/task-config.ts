@@ -159,6 +159,16 @@ export interface TaskConfig {
    * Default "warn". See `resolveWikilinkValidation`.
    */
   wikilinkValidation?: WikilinkValidationMode;
+
+  /**
+   * User-defined page types for wiki_ensure_page (issue #169). Merges with
+   * the 7 built-in types (entity, concept, synthesis, analysis, requirement,
+   * skill, case). Each key is the type name; each value is the folder name
+   * inside wiki/. Example: { "decision": "decisions", "metric": "metrics" }
+   * → wiki_ensure_page(type="decision") creates wiki/decisions/<slug>.md.
+   * Custom types use a generic page template (no per-type templates).
+   */
+  customTypes?: Record<string, string>;
 }
 
 export const TASK_DEFAULTS: TaskConfig = {};
@@ -284,6 +294,18 @@ function readNamespacedConfig(path: string): Partial<TaskConfig> {
     const wl = section.wikilinkValidation;
     if (typeof wl === "string" && (WIKILINK_VALIDATION_MODES as readonly string[]).includes(wl)) {
       out.wikilinkValidation = wl as WikilinkValidationMode;
+    }
+
+    const ct = section.customTypes;
+    if (ct && typeof ct === "object" && !Array.isArray(ct)) {
+      const entries = Object.entries(ct as Record<string, unknown>);
+      const valid: Record<string, string> = {};
+      for (const [k, v] of entries) {
+        if (typeof k === "string" && typeof v === "string" && k && v) {
+          valid[k] = v;
+        }
+      }
+      if (Object.keys(valid).length) out.customTypes = valid;
     }
 
     return out;
@@ -474,6 +496,7 @@ const KNOWN_KEYS = [
   "synthesisLanguage",
   "synthesisMaxTokens",
   "wikilinkValidation",
+  "customTypes",
 ] as const;
 
 export function loadTaskConfigSources(
