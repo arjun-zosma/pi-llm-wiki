@@ -346,6 +346,20 @@ export function buildResolvedBacklinks(
   return { targets: sorted, unresolved, diagnostics };
 }
 
+/**
+ * Pre-write wikilink gate mode (issue #172). Two independent behaviors, not a
+ * severity ladder:
+ *   1. resolvable-but-drifted links (target exists): leave vs. rewrite-to-canonical
+ *   2. unresolvable links (target absent — a forward reference / gap): ignore vs. report vs. reject
+ *
+ *   off       = leave + ignore   (opt-out; zero behavior change)
+ *   warn      = leave + report   (default; non-mutating, non-blocking, surfaces issues)
+ *   normalize = rewrite + report (fixes resolvable links; still reports gaps)
+ *   strict    = leave + reject   (blocks the write with the bad links named; agent retry signal)
+ *
+ * A link that RESOLVES is never flagged — only normalized. Only missing/ambiguous targets
+ * produce diagnostics.
+ */
 export type WikilinkValidationMode = "off" | "warn" | "strict" | "normalize";
 
 // ── Pre-write validation & normalization (issue #172, Layer 2) ─────────
@@ -410,4 +424,32 @@ export function auditWikilinks(
   }
 
   return { diagnostics, body: out, changed: out !== body };
+}
+export interface WikilinkGateResult {
+  /** false only when mode === "strict" AND there are unresolvable/ambiguous links. */
+  ok: boolean;
+  /** The body to write (normalized when mode === "normalize", else the input). */
+  body: string;
+  /** Unresolved / ambiguous link diagnostics (empty for "off" / clean bodies). */
+  diagnostics: KnowledgeDiagnostic[];
+}
+
+/**
+ * Apply the pre-write wikilink gate to a body. Wraps {@link auditWikilinks}:
+ * blocks (ok:false) only in strict mode with issues, rewrites in normalize mode,
+ * and always returns the diagnostics so callers can surface them (warn/normalize).
+ */
+export function applyWikilinkGate(
+  body: string,
+  index: WikilinkIndex,
+  sourceId: string,
+  mode: WikilinkValidationMode,
+): WikilinkGateResult {
+  if (mode === "off") return { ok: true, body, diagnostics: [] };
+  const audit = auditWikilinks(body, index, sourceId, mode);
+  return {
+    ok: !(mode === "strict" && audit.diagnostics.length > 0),
+    body: mode === "normalize" ? audit.body : body,
+    diagnostics: audit.diagnostics,
+  };
 }

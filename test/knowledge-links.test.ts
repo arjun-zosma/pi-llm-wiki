@@ -250,3 +250,44 @@ describe("auditWikilinks", () => {
     expect(r.changed).toBe(false);
   });
 });
+import { applyWikilinkGate } from "../extensions/llm-wiki/lib/knowledge-links.js";
+
+const gateIdx = buildWikilinkIndex(["concepts/transformer"]);
+
+describe("applyWikilinkGate", () => {
+  const body = "see [[transformer]] and [[ghost]]";
+
+  it("off → ok, unchanged body, no diagnostics", () => {
+    const r = applyWikilinkGate(body, gateIdx, "x", "off");
+    expect(r.ok).toBe(true);
+    expect(r.body).toBe(body);
+    expect(r.diagnostics).toEqual([]);
+  });
+
+  it("warn → ok, unchanged body, reports only the missing link", () => {
+    const r = applyWikilinkGate(body, gateIdx, "x", "warn");
+    expect(r.ok).toBe(true);
+    expect(r.body).toBe(body); // not rewritten
+    const codes = r.diagnostics.map((d) => d.code);
+    expect(codes).toEqual(["link_unresolved"]); // [[ghost]] only; [[transformer]] resolves
+  });
+
+  it("strict → not ok when a link is missing", () => {
+    const r = applyWikilinkGate(body, gateIdx, "x", "strict");
+    expect(r.ok).toBe(false);
+    expect(r.diagnostics.length).toBe(1);
+  });
+
+  it("strict → ok when every link resolves", () => {
+    const r = applyWikilinkGate("see [[transformer]]", gateIdx, "x", "strict");
+    expect(r.ok).toBe(true);
+    expect(r.diagnostics).toEqual([]);
+  });
+
+  it("normalize → rewrites resolvable links, still reports missing", () => {
+    const r = applyWikilinkGate(body, gateIdx, "x", "normalize");
+    expect(r.ok).toBe(true);
+    expect(r.body).toBe("see [[concepts/transformer]] and [[ghost]]");
+    expect(r.diagnostics.map((d) => d.code)).toEqual(["link_unresolved"]);
+  });
+});
