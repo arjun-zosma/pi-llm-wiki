@@ -13,9 +13,15 @@ import {
   serializeKnowledgeDocument,
   writeKnowledgeDocumentFile,
 } from "./knowledge-document.js";
+import {
+  type WikilinkValidationMode,
+  auditWikilinks,
+  buildWikilinkIndex,
+} from "./knowledge-links.js";
 import { appendEvent, rebuildMetadataLight } from "./metadata.js";
 import { runSubAgent } from "./subagent.js";
-import { type VaultPaths, fmtDate, slugify } from "./utils.js";
+import { resolveWikilinkValidation } from "./task-config.js";
+import { type VaultPaths, fmtDate, readJson, slugify } from "./utils.js";
 import { VaultWriteError, assertWritableVault } from "./vault-format.js";
 
 /**
@@ -84,6 +90,8 @@ export interface CommitResult {
   entitiesLinked: string[];
   conceptsLinked: string[];
   contradictions: number;
+  /** Wikilink gate diagnostics from `commitSynthesis` (warn/normalize modes). */
+  wikilinkDiagnostics?: KnowledgeDiagnostic[];
 }
 
 export type CommitSynthesisOutcome =
@@ -302,6 +310,28 @@ export function buildIngestedSourcePage(
 }
 
 /**
+ * Build the wikilink index used by the pre-write gate: every existing page id
+ * (from the registry) plus the page ids this commit is about to create, so a
+ * link to a sibling created in the same ingest resolves instead of
+ * false-positiving as missing.
+ */
+function buildIngestAuditIndex(
+  paths: VaultPaths,
+  sourceId: string,
+  data: SynthesisData,
+): ReturnType<typeof buildWikilinkIndex> {
+  const registry = readJson<{ pages: Record<string, unknown> }>(join(paths.meta, "registry.json"), {
+    pages: {},
+  });
+  const newIds = [
+    `sources/${sourceId}`,
+    ...data.entities.filter((e) => slugify(e.title)).map((e) => `entities/${slugify(e.title)}`),
+    ...data.concepts.filter((c) => slugify(c.title)).map((c) => `concepts/${slugify(c.title)}`),
+  ];
+  return buildWikilinkIndex([...Object.keys(registry.pages), ...newIds]);
+}
+
+/**
  * Persist a synthesis deterministically: rewrite the source page (status →
  * ingested), create missing entity/concept pages (existing pages are linked,
  * never overwritten), and log the event. Pure file I/O — no LLM, no network.
@@ -313,6 +343,7 @@ export function commitSynthesis(
   data: SynthesisData,
   date: string = fmtDate(),
   lang?: string,
+  wikilinkValidation?: WikilinkValidationMode,
 ): CommitSynthesisOutcome {
   const result: CommitResult = {
     sourceId,
@@ -333,6 +364,24 @@ export function commitSynthesis(
     throw error;
   }
 
+  // Pre-write wikilink gate (issue #172, Layer 2). Applies only to the
+  // model-authored source body; entity/concept pages are generated templates.
+  const mode = resolveWikilinkValidation({ wikilinkValidation });
+  let sourceBody = buildIngestedSourcePageBody(manifest, data, date, lang);
+  if (mode !== "off") {
+    const audit = auditWikilinks(
+      sourceBody,
+      buildIngestAuditIndex(paths, sourceId, data),
+      sourceId,
+      mode,
+    );
+    if (mode === "strict" && audit.diagnostics.length > 0) {
+      return { ok: false, sourceId, diagnostics: audit.diagnostics };
+    }
+    if (mode === "normalize") sourceBody = audit.body;
+    if (audit.diagnostics.length > 0) result.wikilinkDiagnostics = audit.diagnostics;
+  }
+
   // Patch existing documents so unknown fields, legacy sources, and titles survive.
   let sourceDocument: KnowledgeDocument;
   if (existsSync(result.sourcePage)) {
@@ -340,7 +389,7 @@ export function commitSynthesis(
     if (!parsed.ok) return { ok: false, sourceId, diagnostics: parsed.diagnostics };
     sourceDocument = patchKnowledgeDocument(parsed.document, {
       fields: { status: "ingested", updated: date },
-      body: buildIngestedSourcePageBody(manifest, data, date, lang),
+      body: sourceBody,
     });
   } else {
     sourceDocument = createKnowledgeDocument(
@@ -355,7 +404,7 @@ export function commitSynthesis(
         status: "ingested",
         updated: date,
       },
-      buildIngestedSourcePageBody(manifest, data, date, lang),
+      sourceBody,
     );
   }
   mkdirSync(join(paths.wiki, "sources"), { recursive: true });
