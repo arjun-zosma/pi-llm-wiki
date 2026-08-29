@@ -178,7 +178,10 @@ export function registerWikiRetro(pi: ExtensionAPI, runtime?: Runtime): void {
                   .join("\n")}`,
               },
             ],
-            details: { error: "link_validation", issues: wikilinkIssues } as Record<string, unknown>,
+            details: { error: "link_validation", issues: wikilinkIssues } as Record<
+              string,
+              unknown
+            >,
             isError: true,
           };
         }

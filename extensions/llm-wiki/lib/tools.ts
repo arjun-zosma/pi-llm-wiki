@@ -11,12 +11,16 @@ import {
   serializeKnowledgeDocument,
   writeKnowledgeDocumentFile,
 } from "./knowledge-document.js";
-import { applyWikilinkGate, buildResolvedBacklinks, buildWikilinkIndex } from "./knowledge-links.js";
+import {
+  applyWikilinkGate,
+  buildResolvedBacklinks,
+  buildWikilinkIndex,
+} from "./knowledge-links.js";
 import { repairLegacyKnowledgeDocuments } from "./legacy-repair.js";
 import { type Registry, appendEvent, rebuildMetadata, rebuildMetadataLight } from "./metadata.js";
 import type { Runtime } from "./runtime.js";
 import { captureFile, captureText, captureUrl } from "./source-packet.js";
-import { parseModelRef, loadTaskConfig, resolveWikilinkValidation } from "./task-config.js";
+import { loadTaskConfig, parseModelRef, resolveWikilinkValidation } from "./task-config.js";
 import {
   type VaultPaths,
   detectVaultFormat,
@@ -595,7 +599,10 @@ export function registerWikiEnsurePage(pi: ExtensionAPI, runtime?: Runtime): voi
                   .join("\n")}`,
               },
             ],
-            details: { error: "link_validation", issues: wikilinkIssues } as Record<string, unknown>,
+            details: { error: "link_validation", issues: wikilinkIssues } as Record<
+              string,
+              unknown
+            >,
             isError: true,
           };
         }
@@ -634,9 +641,7 @@ export function registerWikiEnsurePage(pi: ExtensionAPI, runtime?: Runtime): voi
         ? `\n\n⚠️ ${wikilinkIssues.length} wikilink issue(s):\n${wikilinkIssues.map((m) => `- ${m}`).join("\n")}`
         : "";
       return {
-        content: [
-          { type: "text", text: `✅ Created ${type} page: \`${pagePath}\`${gateNote}` },
-        ],
+        content: [{ type: "text", text: `✅ Created ${type} page: \`${pagePath}\`${gateNote}` }],
         details: {
           path: pagePath,
           created: true,

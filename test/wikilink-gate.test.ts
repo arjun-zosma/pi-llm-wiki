@@ -12,12 +12,20 @@ interface Tool {
     s: undefined,
     u: undefined,
     ctx: unknown,
-  ) => Promise<{ isError?: boolean; content: Array<{ text: string }>; details: Record<string, unknown> }>;
+  ) => Promise<{
+    isError?: boolean;
+    content: Array<{ text: string }>;
+    details: Record<string, unknown>;
+  }>;
 }
 
 function capture(fn: (pi: ExtensionAPI) => void): Tool {
   let tool: Tool | undefined;
-  const pi = { registerTool: (def: unknown) => (tool = def as Tool) } as unknown as ExtensionAPI;
+  const pi = {
+    registerTool: (def: unknown) => {
+      tool = def as Tool;
+    },
+  } as unknown as ExtensionAPI;
   fn(pi);
   if (!tool) throw new Error("tool not registered");
   return tool;
@@ -38,10 +46,7 @@ beforeEach(() => {
   }
   // config.json is required — both tools call inspectWritableVault, which hard-blocks
   // on an absent/unreadable config (config_invalid_knowledge_format). Mirror retro.test.ts.
-  writeFileSync(
-    join(llm, "config.json"),
-    JSON.stringify({ topic: "Test", mode: "personal" }),
-  );
+  writeFileSync(join(llm, "config.json"), JSON.stringify({ topic: "Test", mode: "personal" }));
   ensureVaultStructure(getVaultPaths(wikiDir));
   // Seed the registry with one resolvable target so [[transformer]] resolves and [[ghost]] does not.
   writeFileSync(
@@ -49,7 +54,13 @@ beforeEach(() => {
     JSON.stringify({
       version: "1.0",
       last_updated: "",
-      pages: { "concepts/transformer": { id: "concepts/transformer", title: "Transformer", type: "concept" } },
+      pages: {
+        "concepts/transformer": {
+          id: "concepts/transformer",
+          title: "Transformer",
+          type: "concept",
+        },
+      },
     }),
   );
   // No .pi/settings.json here → default mode is "warn".
@@ -64,7 +75,10 @@ afterEach(() => {
 function setMode(mode: string): void {
   const cfg = join(wikiDir, ".pi");
   mkdirSync(cfg, { recursive: true });
-  writeFileSync(join(cfg, "settings.json"), JSON.stringify({ "llm-wiki": { wikilinkValidation: mode } }));
+  writeFileSync(
+    join(cfg, "settings.json"),
+    JSON.stringify({ "llm-wiki": { wikilinkValidation: mode } }),
+  );
 }
 
 describe("wiki_ensure_page wikilink gate", () => {
@@ -113,7 +127,9 @@ describe("wiki_ensure_page wikilink gate", () => {
     );
     expect(res.isError).toBe(true);
     expect(res.details.error).toBe("link_validation");
-    expect(existsSync(join(getVaultPaths(wikiDir).wiki, "concepts", "ghost-concept.md"))).toBe(false);
+    expect(existsSync(join(getVaultPaths(wikiDir).wiki, "concepts", "ghost-concept.md"))).toBe(
+      false,
+    );
   });
 
   it("normalize → rewrites resolvable link, reports the missing one", async () => {
@@ -151,7 +167,9 @@ describe("wiki_retro wikilink gate", () => {
     const issues = res.details.wikilinkIssues as string[];
     expect(issues.length).toBe(1);
     expect(issues[0]).toContain("ghost");
-    expect(existsSync(join(getVaultPaths(wikiDir).wiki, "sources", "transformer-note.md"))).toBe(true);
+    expect(existsSync(join(getVaultPaths(wikiDir).wiki, "sources", "transformer-note.md"))).toBe(
+      true,
+    );
   });
 
   it("strict → rejects, writes nothing", async () => {
@@ -166,7 +184,9 @@ describe("wiki_retro wikilink gate", () => {
     );
     expect(res.isError).toBe(true);
     expect(res.details.error).toBe("link_validation");
-    expect(existsSync(join(getVaultPaths(wikiDir).wiki, "sources", "transformer-note.md"))).toBe(false);
+    expect(existsSync(join(getVaultPaths(wikiDir).wiki, "sources", "transformer-note.md"))).toBe(
+      false,
+    );
   });
 
   it("normalize → saves with the resolvable link rewritten", async () => {
@@ -180,7 +200,10 @@ describe("wiki_retro wikilink gate", () => {
       { cwd: wikiDir, hasUI: false },
     );
     expect(res.isError).toBeFalsy();
-    const text = readFileSync(join(getVaultPaths(wikiDir).wiki, "sources", "transformer-note.md"), "utf-8");
+    const text = readFileSync(
+      join(getVaultPaths(wikiDir).wiki, "sources", "transformer-note.md"),
+      "utf-8",
+    );
     expect(text).toContain("[[concepts/transformer]]");
     expect(text).toContain("[[ghost]]");
   });
