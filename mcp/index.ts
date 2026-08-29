@@ -15,6 +15,10 @@ import { join } from "node:path";
 import { McpServer } from "@modelcontextprotocol/server";
 import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 import * as z from "zod/v4";
+import {
+  loadTaskConfig,
+  resolveWikilinkValidation,
+} from "../extensions/llm-wiki/lib/task-config.js";
 import { getVaultPaths, resolveVaultPaths } from "../extensions/llm-wiki/lib/utils.js";
 import { createExecApi } from "./exec.js";
 import {
@@ -265,7 +269,14 @@ server.registerTool(
     }
 
     const paths = getPaths();
-    const result = await retroOperation(paths, slug, title, body, category);
+    const result = await retroOperation(
+      paths,
+      slug,
+      title,
+      body,
+      category,
+      resolveWikilinkValidation(loadTaskConfig(process.cwd())),
+    );
 
     if (!result.ok) {
       return {
