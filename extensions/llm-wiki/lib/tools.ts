@@ -11,12 +11,12 @@ import {
   serializeKnowledgeDocument,
   writeKnowledgeDocumentFile,
 } from "./knowledge-document.js";
-import { buildResolvedBacklinks, buildWikilinkIndex } from "./knowledge-links.js";
+import { applyWikilinkGate, buildResolvedBacklinks, buildWikilinkIndex } from "./knowledge-links.js";
 import { repairLegacyKnowledgeDocuments } from "./legacy-repair.js";
 import { type Registry, appendEvent, rebuildMetadata, rebuildMetadataLight } from "./metadata.js";
 import type { Runtime } from "./runtime.js";
 import { captureFile, captureText, captureUrl } from "./source-packet.js";
-import { parseModelRef } from "./task-config.js";
+import { parseModelRef, loadTaskConfig, resolveWikilinkValidation } from "./task-config.js";
 import {
   type VaultPaths,
   detectVaultFormat,
@@ -568,7 +568,39 @@ export function registerWikiEnsurePage(pi: ExtensionAPI, runtime?: Runtime): voi
       }
 
       const today = fmtDate();
-      const body = params.content ?? buildPageBody(type, params.title);
+      let body = params.content ?? buildPageBody(type, params.title);
+
+      // Pre-write wikilink gate (#172): validate/normalize caller-supplied content.
+      const mode = resolveWikilinkValidation(loadTaskConfig(ctx.cwd));
+      let wikilinkIssues: string[] = [];
+      if (mode !== "off") {
+        const registry = readJson<{ pages: Record<string, unknown> }>(
+          join(paths.meta, "registry.json"),
+          { pages: {} },
+        );
+        const gate = applyWikilinkGate(
+          body,
+          buildWikilinkIndex(Object.keys(registry.pages)),
+          `${folder}/${slug}`,
+          mode,
+        );
+        wikilinkIssues = gate.diagnostics.map((d) => d.message);
+        if (!gate.ok) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Rejected write — unresolved/ambiguous wikilinks:\n${wikilinkIssues
+                  .map((m) => `- ${m}`)
+                  .join("\n")}`,
+              },
+            ],
+            details: { error: "link_validation", issues: wikilinkIssues } as Record<string, unknown>,
+            isError: true,
+          };
+        }
+        if (mode === "normalize") body = gate.body;
+      }
       const doc = createKnowledgeDocument(
         `${folder}/${slug}.md`,
         {
@@ -598,9 +630,18 @@ export function registerWikiEnsurePage(pi: ExtensionAPI, runtime?: Runtime): voi
         rebuildMetadataLight(paths);
       }
 
+      const gateNote = wikilinkIssues.length
+        ? `\n\n⚠️ ${wikilinkIssues.length} wikilink issue(s):\n${wikilinkIssues.map((m) => `- ${m}`).join("\n")}`
+        : "";
       return {
-        content: [{ type: "text", text: `✅ Created ${type} page: \`${pagePath}\`` }],
-        details: { path: pagePath, created: true } as Record<string, unknown>,
+        content: [
+          { type: "text", text: `✅ Created ${type} page: \`${pagePath}\`${gateNote}` },
+        ],
+        details: {
+          path: pagePath,
+          created: true,
+          wikilinkIssues,
+        } as Record<string, unknown>,
       };
     },
   });
