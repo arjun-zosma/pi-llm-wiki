@@ -241,4 +241,102 @@ describe("commitSynthesis", () => {
     if (!res.ok) return;
     expect(res.entitiesCreated).toEqual(["untitled"]);
   });
+
+  describe("commitSynthesis wikilink gate", () => {
+    function makeData(summary: string): SynthesisData {
+      return {
+        summary,
+        key_takeaways: ["a"],
+        entities: [{ title: "Alice", description: "A person." }],
+        concepts: [{ title: "Transformer", definition: "An architecture." }],
+      };
+    }
+
+    it("strict blocks the write and returns ok:false on an unresolved link", () => {
+      const paths = getVaultPaths(wikiDir);
+      const res = commitSynthesis(
+        paths,
+        "SRC-001",
+        MANIFEST,
+        makeData("See [[ghost-page]] for details."),
+        "2026-06-06",
+        undefined,
+        "strict",
+      );
+      expect(res.ok).toBe(false);
+      if (!res.ok) {
+        expect(res.diagnostics.map((d) => d.code)).toContain("link_unresolved");
+      }
+      // Nothing was written:
+      expect(existsSync(join(paths.wiki, "sources", "SRC-001.md"))).toBe(false);
+      expect(existsSync(join(paths.wiki, "entities", "alice.md"))).toBe(false);
+    });
+
+    it("warn writes and attaches wikilinkDiagnostics", () => {
+      const paths = getVaultPaths(wikiDir);
+      const res = commitSynthesis(
+        paths,
+        "SRC-001",
+        MANIFEST,
+        makeData("See [[ghost-page]] for details."),
+        "2026-06-06",
+        undefined,
+        "warn",
+      );
+      expect(res.ok).toBe(true);
+      if (res.ok) {
+        expect(res.wikilinkDiagnostics?.map((d) => d.code)).toContain("link_unresolved");
+      }
+      expect(existsSync(join(paths.wiki, "sources", "SRC-001.md"))).toBe(true);
+    });
+
+    it("normalize rewrites resolvable links to canonical ids in the written page", () => {
+      const paths = getVaultPaths(wikiDir);
+      // [[transformer]] resolves because makeData() creates a "Transformer" concept
+      // in the SAME commit — buildIngestAuditIndex adds concepts/transformer to the
+      // index, so no pre-existing page is needed (this also proves same-batch links resolve).
+      const res = commitSynthesis(
+        paths,
+        "SRC-001",
+        MANIFEST,
+        makeData("The [[transformer|T]] changed everything."),
+        "2026-06-06",
+        undefined,
+        "normalize",
+      );
+      expect(res.ok).toBe(true);
+      const written = readFileSync(join(paths.wiki, "sources", "SRC-001.md"), "utf-8");
+      expect(written).toContain("[[concepts/transformer\\|T]]");
+    });
+
+    it("off is a no-op (writes verbatim, no diagnostics)", () => {
+      const paths = getVaultPaths(wikiDir);
+      const res = commitSynthesis(
+        paths,
+        "SRC-001",
+        MANIFEST,
+        makeData("See [[ghost-page]] for details."),
+        "2026-06-06",
+        undefined,
+        "off",
+      );
+      expect(res.ok).toBe(true);
+      if (res.ok) expect(res.wikilinkDiagnostics).toBeUndefined();
+      const written = readFileSync(join(paths.wiki, "sources", "SRC-001.md"), "utf-8");
+      expect(written).toContain("[[ghost-page]]");
+    });
+
+    it("defaults to warn when mode is omitted", () => {
+      const paths = getVaultPaths(wikiDir);
+      const res = commitSynthesis(
+        paths,
+        "SRC-001",
+        MANIFEST,
+        makeData("See [[ghost-page]] for details."),
+        "2026-06-06",
+      );
+      expect(res.ok).toBe(true);
+      if (res.ok) expect(res.wikilinkDiagnostics?.length).toBeGreaterThan(0);
+    });
+  });
 });

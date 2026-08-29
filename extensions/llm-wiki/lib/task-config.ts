@@ -9,6 +9,7 @@ import {
   resolveGlobalSettingsPath,
   resolveProjectSettingsPath,
 } from "./host.js";
+import type { WikilinkValidationMode } from "./knowledge-links.js";
 
 /**
  * Configuration for the background-task lane (issue #64, part of #63).
@@ -147,6 +148,17 @@ export interface TaskConfig {
    * response truncates before commit_synthesis can be called.
    */
   synthesisMaxTokens?: number;
+
+  /**
+   * Wikilink gate applied to the ingested source body before pages are
+   * written (issue #172, Layer 2). Reuses the Layer 1 resolver.
+   *   - "off"       : no-op.
+   *   - "warn"      : write proceeds; unresolved/ambiguous links are reported.
+   *   - "strict"    : block the write (commit returns ok:false) if any link is unresolvable.
+   *   - "normalize" : rewrite resolvable links to their canonical id, then write.
+   * Default "warn". See `resolveWikilinkValidation`.
+   */
+  wikilinkValidation?: WikilinkValidationMode;
 }
 
 export const TASK_DEFAULTS: TaskConfig = {};
@@ -157,6 +169,24 @@ export const TASK_DEFAULTS: TaskConfig = {};
  */
 export function noticesEnabled(config: TaskConfig | undefined): boolean {
   return config?.notices !== false;
+}
+
+const WIKILINK_VALIDATION_MODES: readonly WikilinkValidationMode[] = [
+  "off",
+  "warn",
+  "strict",
+  "normalize",
+];
+
+/**
+ * Resolve the wikilink write-gate mode (issue #172, Layer 2). Defaults to
+ * `warn` — ingest always writes and reports; only an explicit `strict` blocks.
+ * Unknown values fall back to `warn` rather than failing the ingest.
+ */
+export function resolveWikilinkValidation(config: TaskConfig | undefined): WikilinkValidationMode {
+  const v = config?.wikilinkValidation;
+  if (v && (WIKILINK_VALIDATION_MODES as readonly string[]).includes(v)) return v;
+  return "warn";
 }
 
 /**
@@ -249,6 +279,11 @@ function readNamespacedConfig(path: string): Partial<TaskConfig> {
     const maxTokens = section.synthesisMaxTokens;
     if (typeof maxTokens === "number" && Number.isFinite(maxTokens) && maxTokens > 0) {
       out.synthesisMaxTokens = Math.floor(maxTokens);
+    }
+
+    const wl = section.wikilinkValidation;
+    if (typeof wl === "string" && (WIKILINK_VALIDATION_MODES as readonly string[]).includes(wl)) {
+      out.wikilinkValidation = wl as WikilinkValidationMode;
     }
 
     return out;
@@ -438,6 +473,7 @@ const KNOWN_KEYS = [
   "trajectories",
   "synthesisLanguage",
   "synthesisMaxTokens",
+  "wikilinkValidation",
 ] as const;
 
 export function loadTaskConfigSources(

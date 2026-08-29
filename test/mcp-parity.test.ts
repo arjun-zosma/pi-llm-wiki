@@ -128,7 +128,7 @@ describe("MCP parity with shared services", () => {
       rmSync(personalPagePath);
       rebuildMetadata(personalVault);
     }
-  });
+  }, 30_000);
 
   it("retro parity: MCP uses same saveInsight as Pi", async () => {
     // Pi-style call

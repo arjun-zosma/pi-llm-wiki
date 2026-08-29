@@ -21,6 +21,7 @@ export type DiagnosticCode =
   | "okf_version_mismatch"
   | "link_path_escape"
   | "link_unresolved"
+  | "link_ambiguous"
   | "event_source_missing"
   | "event_source_unreadable"
   | "event_invalid_json"
