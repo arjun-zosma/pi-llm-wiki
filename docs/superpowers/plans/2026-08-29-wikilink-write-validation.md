@@ -198,15 +198,13 @@ git commit -m "feat(wikilink): add wikilinkValidation setting + resolver (defaul
 
 - [ ] **Step 1: Write the failing test**
 
-Append to `test/knowledge-links.test.ts`:
+Two edits to `test/knowledge-links.test.ts`:
+
+1. Add `auditWikilinks` to the **existing** top-of-file import (the one that already imports `buildResolvedBacklinks`, `buildWikilinkIndex`, `extractKnowledgeLinks`, `extractLegacyWikilinks`). Do NOT add a second import statement from this module.
+2. Append this `describe` block to the **end** of the file. `buildWikilinkIndex` is already imported at the top, so it is used directly (no alias, no new import):
 
 ```ts
-import { auditWikilinks } from "../extensions/llm-wiki/lib/knowledge-links.js";
-import {
-  buildWikilinkIndex as bi,
-} from "../extensions/llm-wiki/lib/knowledge-links.js";
-
-const idx = bi([
+const idx = buildWikilinkIndex([
   "entities/alice",
   "concepts/transformer",
   "concepts/attention",
@@ -228,7 +226,7 @@ describe("auditWikilinks", () => {
   });
 
   it("warn flags ambiguous when a bare target matches multiple pages", () => {
-    const ambiguous = bi(["entities/alice", "concepts/alice"]);
+    const ambiguous = buildWikilinkIndex(["entities/alice", "concepts/alice"]);
     const r = auditWikilinks("who is [[alice]]?", ambiguous, "SRC-001", "warn");
     const amb = r.diagnostics.find((d) => d.code === "link_ambiguous");
     expect(amb).toBeDefined();
