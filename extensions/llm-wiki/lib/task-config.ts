@@ -288,7 +288,7 @@ function readNamespacedConfig(path: string): Partial<TaskConfig> {
       typeof wl === "string" &&
       (WIKILINK_VALIDATION_MODES as readonly string[]).includes(wl)
     ) {
-      out.wikilinkValidation = wl;
+      out.wikilinkValidation = wl as WikilinkValidationMode;
     }
 
     return out;
