@@ -415,6 +415,7 @@ export function registerWikiIngest(pi: ExtensionAPI, runtime?: Runtime): void {
                 manifest: s.manifest,
                 extracted: s.extracted,
                 synthesisLanguage: runtime.config.synthesisLanguage,
+                wikilinkValidation: runtime.config.wikilinkValidation,
               });
               if (committed) {
                 // Background semantic embeddings (#66): embed the pages this
@@ -428,8 +429,10 @@ export function registerWikiIngest(pi: ExtensionAPI, runtime?: Runtime): void {
                 ];
                 launchEmbedPages(runtime, launchCtx, paths, pageIds, `embed:ingest:${s.id}`);
               }
+              const wl = committed?.wikilinkDiagnostics?.length ?? 0;
+              const wlNote = wl > 0 ? `, ${wl} wikilink issue${wl === 1 ? "" : "s"}` : "";
               const summary = committed
-                ? `LLM Wiki: ingested ${s.id} → ${committed.entitiesCreated.length} entit${committed.entitiesCreated.length === 1 ? "y" : "ies"}, ${committed.conceptsCreated.length} concept${committed.conceptsCreated.length === 1 ? "" : "s"}`
+                ? `LLM Wiki: ingested ${s.id} → ${committed.entitiesCreated.length} entit${committed.entitiesCreated.length === 1 ? "y" : "ies"}, ${committed.conceptsCreated.length} concept${committed.conceptsCreated.length === 1 ? "" : "s"}${wlNote}`
                 : `LLM Wiki: ${s.id} produced no synthesis`;
               if (ctx.hasUI) {
                 ctx.ui.notify(summary, committed ? "info" : "warning");

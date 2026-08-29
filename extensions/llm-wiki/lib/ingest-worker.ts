@@ -506,6 +506,8 @@ export interface RunIngestSynthesisArgs {
   synthesisLanguage?: string;
   /** Max output tokens for synthesizer sub-agent (issue #160). Default 16384. */
   synthesisMaxTokens?: number;
+  /** Wikilink write-gate mode for the ingested source body (issue #172). */
+  wikilinkValidation?: WikilinkValidationMode;
 }
 
 /**
@@ -528,6 +530,7 @@ export async function runIngestSynthesis(
     signal,
     synthesisLanguage,
     synthesisMaxTokens,
+    wikilinkValidation,
   } = args;
   const content = extracted.slice(0, maxChars ?? 24_000);
   if (!content.trim()) return undefined;
@@ -553,6 +556,7 @@ export async function runIngestSynthesis(
         params,
         undefined,
         synthesisLanguage,
+        wikilinkValidation,
       );
       if (!outcome.ok) {
         return {
