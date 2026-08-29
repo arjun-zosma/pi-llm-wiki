@@ -58,6 +58,7 @@ All of the above are viewable and editable in the `/wiki-settings` TUI (persists
 | `taskModel`            | —          | Model for background tasks (`{ provider: "openai", id: "gpt-4o" }`) |
 | `synthesisLanguage`    | —          | BCP 47 language tag for ingest synthesis (e.g. `"ru"`, `"fr"`). When unset, synthesis defaults to English. |
 | `synthesisMaxTokens`     | 16384    | Max output tokens for ingest/synthesis runs (stored as a plain number)                        |
+| `wikilinkValidation`   | warn       | Pre-write wikilink gate for page writes (ingest, `wiki_ensure_page`, `wiki_retro`, MCP `wiki_retro`). `off` ignore, `warn` report, `normalize` rewrite resolvable links, `strict` block writes with unresolved/ambiguous links |
 | `trajectories`         | false      | Enable agent-trajectory working-memory                       |
 | `notices`              | true       | Show wiki activity notices in chat                           |
 | `ambientPersonalVault` | host-dependent | Let the personal vault act as the ambient vault in projects that have no wiki. `true` under pi, `false` under oh-my-pi — see below. |
