@@ -405,9 +405,7 @@ export function auditWikilinks(
   if (mode === "normalize") {
     out = body.replace(WIKILINK_REPLACE_RE, (full, raw: string, alias: string | undefined) => {
       const resolved = resolveWikilink(normalizeWikilinkTarget(raw), index);
-      return resolved.kind === "resolved"
-        ? `[[${resolved.id}${alias ?? ""}]]`
-        : full;
+      return resolved.kind === "resolved" ? `[[${resolved.id}${alias ?? ""}]]` : full;
     });
   }
 

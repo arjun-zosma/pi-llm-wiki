@@ -1,11 +1,11 @@
-import { mkdirSync, rmSync, writeFileSync, mkdtempSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  type TaskConfig,
   loadTaskConfig,
   resolveWikilinkValidation,
-  type TaskConfig,
 } from "../extensions/llm-wiki/lib/task-config.js";
 
 describe("resolveWikilinkValidation", () => {

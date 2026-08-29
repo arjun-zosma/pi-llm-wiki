@@ -183,9 +183,7 @@ const WIKILINK_VALIDATION_MODES: readonly WikilinkValidationMode[] = [
  * `warn` — ingest always writes and reports; only an explicit `strict` blocks.
  * Unknown values fall back to `warn` rather than failing the ingest.
  */
-export function resolveWikilinkValidation(
-  config: TaskConfig | undefined,
-): WikilinkValidationMode {
+export function resolveWikilinkValidation(config: TaskConfig | undefined): WikilinkValidationMode {
   const v = config?.wikilinkValidation;
   if (v && (WIKILINK_VALIDATION_MODES as readonly string[]).includes(v)) return v;
   return "warn";
@@ -284,10 +282,7 @@ function readNamespacedConfig(path: string): Partial<TaskConfig> {
     }
 
     const wl = section.wikilinkValidation;
-    if (
-      typeof wl === "string" &&
-      (WIKILINK_VALIDATION_MODES as readonly string[]).includes(wl)
-    ) {
+    if (typeof wl === "string" && (WIKILINK_VALIDATION_MODES as readonly string[]).includes(wl)) {
       out.wikilinkValidation = wl as WikilinkValidationMode;
     }
 
