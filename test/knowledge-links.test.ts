@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  auditWikilinks,
   buildResolvedBacklinks,
   buildWikilinkIndex,
   extractKnowledgeLinks,
@@ -199,5 +200,53 @@ describe("resolveWikilink normalization", () => {
     expect(result.targets).toEqual([]);
     expect(result.unresolved).toEqual([{ target: "nonexistent", syntax: "wikilink" }]);
     expect(result.diagnostics[0].code).toBe("link_unresolved");
+  });
+});
+const idx = buildWikilinkIndex([
+  "entities/alice",
+  "concepts/transformer",
+  "concepts/attention",
+  "concepts/other-page",
+]);
+
+describe("auditWikilinks", () => {
+  it("off returns no diagnostics and unchanged body", () => {
+    const r = auditWikilinks("see [[ghost]]", idx, "SRC-001", "off");
+    expect(r.diagnostics).toEqual([]);
+    expect(r.body).toBe("see [[ghost]]");
+    expect(r.changed).toBe(false);
+  });
+
+  it("warn reports an unresolved link and leaves the body untouched", () => {
+    const r = auditWikilinks("bad [[ghost]]", idx, "SRC-001", "warn");
+    expect(r.body).toBe("bad [[ghost]]");
+    expect(r.diagnostics.map((d) => d.code)).toContain("link_unresolved");
+  });
+
+  it("warn flags ambiguous when a bare target matches multiple pages", () => {
+    const ambiguous = buildWikilinkIndex(["entities/alice", "concepts/alice"]);
+    const r = auditWikilinks("who is [[alice]]?", ambiguous, "SRC-001", "warn");
+    const amb = r.diagnostics.find((d) => d.code === "link_ambiguous");
+    expect(amb).toBeDefined();
+    expect(r.body).toBe("who is [[alice]]?");
+  });
+
+  it("normalize rewrites resolvable targets to canonical id, preserves alias", () => {
+    const body = "see [[transformer|TF]] and [[alice]]";
+    const r = auditWikilinks(body, idx, "SRC-001", "normalize");
+    expect(r.body).toBe("see [[concepts/transformer|TF]] and [[entities/alice]]");
+    expect(r.changed).toBe(true);
+  });
+
+  it("normalize leaves unresolvable links verbatim", () => {
+    const r = auditWikilinks("see [[ghost]]", idx, "SRC-001", "normalize");
+    expect(r.body).toBe("see [[ghost]]");
+    expect(r.changed).toBe(false);
+  });
+
+  it("normalize is a no-op when every link is already canonical", () => {
+    const r = auditWikilinks("see [[concepts/attention]]", idx, "SRC-001", "normalize");
+    expect(r.body).toBe("see [[concepts/attention]]");
+    expect(r.changed).toBe(false);
   });
 });

@@ -347,3 +347,69 @@ export function buildResolvedBacklinks(
 }
 
 export type WikilinkValidationMode = "off" | "warn" | "strict" | "normalize";
+
+// ── Pre-write validation & normalization (issue #172, Layer 2) ─────────
+
+export interface WikilinkAuditResult {
+  /** Unresolved / ambiguous link diagnostics (empty for "off" / clean bodies). */
+  diagnostics: KnowledgeDiagnostic[];
+  /** The body after normalization (identical to input unless normalize rewrote links). */
+  body: string;
+  /** True only when normalize changed the body. */
+  changed: boolean;
+}
+
+const WIKILINK_REPLACE_RE = /\[\[([^\]|]+)(\|[^\]]*)?\]\]/g;
+
+/**
+ * Audit a markdown body's wikilinks against the page index.
+ *
+ * - Collects `link_unresolved` / `link_ambiguous` diagnostics for every link
+ *   that does not resolve to exactly one page (skipped for "off").
+ * - In "normalize" mode, additionally rewrites each link that DOES resolve to
+ *   its canonical page id. Only the target token is replaced (the parser's own
+ *   regex is reused), so `|alias`, escaping, and surrounding text are preserved.
+ *
+ * Pure: no I/O. The caller supplies the index (typically `buildWikilinkIndex`
+ * over existing page ids plus the ids created by the same commit).
+ */
+export function auditWikilinks(
+  body: string,
+  index: WikilinkIndex,
+  sourceId: string,
+  mode: WikilinkValidationMode,
+): WikilinkAuditResult {
+  if (mode === "off") return { diagnostics: [], body, changed: false };
+
+  const diagnostics: KnowledgeDiagnostic[] = [];
+  for (const { target } of extractKnowledgeLinks(body).wikilinks) {
+    const resolved = resolveWikilink(target, index);
+    if (resolved.kind === "ambiguous") {
+      diagnostics.push({
+        severity: "warning",
+        code: "link_ambiguous",
+        path: sourceId,
+        message: `Wikilink target "${target}" matches multiple pages (${resolved.candidates.join(", ")}).`,
+      });
+    } else if (resolved.kind === "missing") {
+      diagnostics.push({
+        severity: "warning",
+        code: "link_unresolved",
+        path: sourceId,
+        message: `Wikilink target "${target}" does not match any page.`,
+      });
+    }
+  }
+
+  let out = body;
+  if (mode === "normalize") {
+    out = body.replace(WIKILINK_REPLACE_RE, (full, raw: string, alias: string | undefined) => {
+      const resolved = resolveWikilink(normalizeWikilinkTarget(raw), index);
+      return resolved.kind === "resolved"
+        ? `[[${resolved.id}${alias ?? ""}]]`
+        : full;
+    });
+  }
+
+  return { diagnostics, body: out, changed: out !== body };
+}
