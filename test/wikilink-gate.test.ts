@@ -133,3 +133,55 @@ describe("wiki_ensure_page wikilink gate", () => {
     expect(text).toContain("[[ghost]]");
   });
 });
+import { registerWikiRetro } from "../extensions/llm-wiki/lib/retro.js";
+
+describe("wiki_retro wikilink gate", () => {
+  const body = "Learned about [[transformer]] and [[ghost]]";
+
+  it("warn (default) → saves, reports the missing link", async () => {
+    const tool = capture((pi) => registerWikiRetro(pi));
+    const res = await tool.execute(
+      "t",
+      { slug: "transformer-note", title: "Transformer Note", body },
+      undefined,
+      undefined,
+      { cwd: wikiDir, hasUI: false },
+    );
+    expect(res.isError).toBeFalsy();
+    const issues = res.details.wikilinkIssues as string[];
+    expect(issues.length).toBe(1);
+    expect(issues[0]).toContain("ghost");
+    expect(existsSync(join(getVaultPaths(wikiDir).wiki, "sources", "transformer-note.md"))).toBe(true);
+  });
+
+  it("strict → rejects, writes nothing", async () => {
+    setMode("strict");
+    const tool = capture((pi) => registerWikiRetro(pi));
+    const res = await tool.execute(
+      "t",
+      { slug: "transformer-note", title: "Transformer Note", body },
+      undefined,
+      undefined,
+      { cwd: wikiDir, hasUI: false },
+    );
+    expect(res.isError).toBe(true);
+    expect(res.details.error).toBe("link_validation");
+    expect(existsSync(join(getVaultPaths(wikiDir).wiki, "sources", "transformer-note.md"))).toBe(false);
+  });
+
+  it("normalize → saves with the resolvable link rewritten", async () => {
+    setMode("normalize");
+    const tool = capture((pi) => registerWikiRetro(pi));
+    const res = await tool.execute(
+      "t",
+      { slug: "transformer-note", title: "Transformer Note", body },
+      undefined,
+      undefined,
+      { cwd: wikiDir, hasUI: false },
+    );
+    expect(res.isError).toBeFalsy();
+    const text = readFileSync(join(getVaultPaths(wikiDir).wiki, "sources", "transformer-note.md"), "utf-8");
+    expect(text).toContain("[[concepts/transformer]]");
+    expect(text).toContain("[[ghost]]");
+  });
+});
