@@ -345,3 +345,5 @@ export function buildResolvedBacklinks(
 
   return { targets: sorted, unresolved, diagnostics };
 }
+
+export type WikilinkValidationMode = "off" | "warn" | "strict" | "normalize";
