@@ -519,7 +519,7 @@ export function registerWikiEnsurePage(pi: ExtensionAPI, runtime?: Runtime): voi
     parameters: Type.Object({
       type: Type.String({
         description:
-          "Page type: entity | concept | synthesis | analysis | requirement | skill | case",
+          "Page type: entity | concept | synthesis | analysis | requirement | skill | case (built-in) or any user-defined type from llm-wiki.customTypes config",
       }),
       title: Type.String({ description: "Page title" }),
       content: Type.Optional(
@@ -542,17 +542,8 @@ export function registerWikiEnsurePage(pi: ExtensionAPI, runtime?: Runtime): voi
         };
       }
 
-      const type = params.type as
-        | "entity"
-        | "concept"
-        | "synthesis"
-        | "analysis"
-        | "requirement"
-        | "skill"
-        | "case";
-      const slug = slugify(params.title);
-
-      const folderMap: Record<string, string> = {
+      const config = loadTaskConfig(ctx.cwd);
+      const builtInFolderMap: Record<string, string> = {
         entity: "entities",
         concept: "concepts",
         synthesis: "syntheses",
@@ -561,6 +552,9 @@ export function registerWikiEnsurePage(pi: ExtensionAPI, runtime?: Runtime): voi
         skill: "skills",
         case: "cases",
       };
+      const folderMap = { ...builtInFolderMap, ...config.customTypes };
+      const type = params.type as string;
+      const slug = slugify(params.title);
       const folder = folderMap[type] || "concepts";
       const pagePath = join(paths.wiki, folder, `${slug}.md`);
 
